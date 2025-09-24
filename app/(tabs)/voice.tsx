@@ -10,18 +10,61 @@ type ConversationEntry = { type: 'user' | 'assistant'; message: string };
 
 type DeviceType = 'light' | 'fan' | 'ac';
 
+type QuickCommand = {
+  label: string;
+  phrase: string;
+  tone?: 'positive' | 'negative' | 'neutral';
+};
+
+const QUICK_COMMANDS: QuickCommand[] = [
+  { label: 'Main Hall Lights On', phrase: 'Turn on all lights in the main hall', tone: 'positive' },
+  { label: 'Main Hall Lights Off', phrase: 'Turn off all lights in the main hall', tone: 'negative' },
+  { label: 'Light A On', phrase: 'Turn on main hall light A', tone: 'positive' },
+  { label: 'Light A Off', phrase: 'Turn off main hall light A', tone: 'negative' },
+  { label: 'Light B On', phrase: 'Turn on main hall light B', tone: 'positive' },
+  { label: 'Light B Off', phrase: 'Turn off main hall light B', tone: 'negative' },
+  { label: 'Main Hall Fan On', phrase: 'Turn on the main hall fan', tone: 'positive' },
+  { label: 'Main Hall Fan Off', phrase: 'Turn off the main hall fan', tone: 'negative' },
+  { label: 'Main Hall AC On', phrase: 'Turn on the main hall AC', tone: 'positive' },
+  { label: 'Main Hall AC Off', phrase: 'Turn off the main hall AC', tone: 'negative' },
+  { label: 'Bedroom 1 Light On', phrase: 'Turn on the bedroom 1 light', tone: 'positive' },
+  { label: 'Bedroom 1 Light Off', phrase: 'Turn off the bedroom 1 light', tone: 'negative' },
+  { label: 'Bedroom 1 Fan On', phrase: 'Turn on the bedroom 1 fan', tone: 'positive' },
+  { label: 'Bedroom 1 Fan Off', phrase: 'Turn off the bedroom 1 fan', tone: 'negative' },
+  { label: 'Bedroom 1 AC On', phrase: 'Turn on the bedroom 1 AC', tone: 'positive' },
+  { label: 'Bedroom 1 AC Off', phrase: 'Turn off the bedroom 1 AC', tone: 'negative' },
+  { label: 'Bedroom 2 Light On', phrase: 'Turn on the bedroom 2 light', tone: 'positive' },
+  { label: 'Bedroom 2 Light Off', phrase: 'Turn off the bedroom 2 light', tone: 'negative' },
+  { label: 'Bedroom 2 Fan On', phrase: 'Turn on the bedroom 2 fan', tone: 'positive' },
+  { label: 'Bedroom 2 Fan Off', phrase: 'Turn off the bedroom 2 fan', tone: 'negative' },
+  { label: 'Bedroom 2 AC On', phrase: 'Turn on the bedroom 2 AC', tone: 'positive' },
+  { label: 'Bedroom 2 AC Off', phrase: 'Turn off the bedroom 2 AC', tone: 'negative' },
+  { label: 'Kitchen Light On', phrase: 'Turn on the kitchen light', tone: 'positive' },
+  { label: 'Kitchen Light Off', phrase: 'Turn off the kitchen light', tone: 'negative' },
+  { label: 'Lock Main Hall Door', phrase: 'Lock the main hall door', tone: 'neutral' },
+  { label: 'Unlock Main Hall Door', phrase: 'Unlock the main hall door', tone: 'neutral' },
+  { label: 'Lock Bedroom 1 Door', phrase: 'Lock the bedroom 1 door', tone: 'neutral' },
+  { label: 'Unlock Bedroom 1 Door', phrase: 'Unlock the bedroom 1 door', tone: 'neutral' },
+  { label: 'Lock Bedroom 2 Door', phrase: 'Lock the bedroom 2 door', tone: 'neutral' },
+  { label: 'Unlock Bedroom 2 Door', phrase: 'Unlock the bedroom 2 door', tone: 'neutral' },
+  { label: 'Lock Kitchen Door', phrase: 'Lock the kitchen door', tone: 'neutral' },
+  { label: 'Unlock Kitchen Door', phrase: 'Unlock the kitchen door', tone: 'neutral' },
+  { label: 'Lock All Doors', phrase: 'Lock all doors', tone: 'neutral' },
+  { label: 'Unlock All Doors', phrase: 'Unlock all doors', tone: 'neutral' },
+];
+
 const ROOM_DEVICE_ID_MAP: Record<string, Record<DeviceType, string[]>> = {
-  hall: {
+  mainhall: {
     light: ['mainhall-light-1', 'mainhall-light-2'],
     fan: ['mainhall-fan-1'],
     ac: ['mainhall-ac-1'],
   },
-  room1: {
+  bedroom1: {
     light: ['bedroom1-light-1'],
     fan: ['bedroom1-fan-1'],
     ac: ['bedroom1-ac-1'],
   },
-  room2: {
+  bedroom2: {
     light: ['bedroom2-light-1'],
     fan: ['bedroom2-fan-1'],
     ac: ['bedroom2-ac-1'],
@@ -35,7 +78,7 @@ const ROOM_DEVICE_ID_MAP: Record<string, Record<DeviceType, string[]>> = {
 
 const INITIAL_ASSISTANT_MESSAGE: ConversationEntry = {
   type: 'assistant',
-  message: 'Hello! I\'m your smart home voice assistant. Try saying "Lock the main door" or "Turn on the hall light".',
+  message: 'Hello! I\'m your smart home voice assistant. Try saying "Lock the main hall door" or "Turn on the bedroom 1 fan".',
 };
 
 export default function VoiceControlScreen() {
@@ -124,35 +167,44 @@ export default function VoiceControlScreen() {
   const normalizeRoomKey = (room?: string): keyof typeof ROOM_DEVICE_ID_MAP => {
     const value = (room || '').toLowerCase();
     if (value.includes('kitchen')) return 'kitchen';
-    if (value.includes('room 2') || value.includes('bedroom 2')) return 'room2';
-    if (value.includes('room') || value.includes('bedroom')) return 'room1';
-    if (value.includes('hall') || value.includes('main')) return 'hall';
-    return 'hall';
+    if (value.includes('bedroom 2') || value.includes('room 2') || value.includes('second bedroom')) return 'bedroom2';
+    if (value.includes('bedroom 1') || value.includes('room 1') || value.includes('first bedroom') || value.includes('bedroom')) return 'bedroom1';
+    if (value.includes('main') || value.includes('hall') || value.includes('living')) return 'mainhall';
+    return 'mainhall';
   };
 
-  const mapRoomToPolicyKey = (roomKey: keyof typeof ROOM_DEVICE_ID_MAP): 'hall' | 'kitchen' | 'bathroom' | 'room1' => {
+  const mapRoomToPolicyKey = (roomKey: keyof typeof ROOM_DEVICE_ID_MAP): 'mainhall' | 'bedroom1' | 'bedroom2' | 'kitchen' => {
     switch (roomKey) {
+      case 'bedroom1':
+        return 'bedroom1';
+      case 'bedroom2':
+        return 'bedroom2';
       case 'kitchen':
         return 'kitchen';
-      case 'room1':
-      case 'room2':
-        return 'room1';
       default:
-        return 'hall';
+        return 'mainhall';
     }
   };
 
   const getRoomDisplayName = (roomKey: keyof typeof ROOM_DEVICE_ID_MAP): string => {
     switch (roomKey) {
+      case 'bedroom1':
+        return 'bedroom 1';
+      case 'bedroom2':
+        return 'bedroom 2';
       case 'kitchen':
         return 'kitchen';
-      case 'room1':
-        return 'bedroom 1';
-      case 'room2':
-        return 'bedroom 2';
       default:
         return 'main hall';
     }
+  };
+
+  const normalizeDoorKey = (door?: string): 'mainhall' | 'bedroom1' | 'bedroom2' | 'kitchen' => {
+    const value = (door || '').toLowerCase();
+    if (value.includes('bedroom 2') || value.includes('room 2') || value.includes('second')) return 'bedroom2';
+    if (value.includes('bedroom 1') || value.includes('room 1') || value.includes('first') || value.includes('bedroom')) return 'bedroom1';
+    if (value.includes('kitchen')) return 'kitchen';
+    return 'mainhall';
   };
 
   const ensureDeviceType = (value?: string): DeviceType => {
@@ -191,7 +243,7 @@ export default function VoiceControlScreen() {
   };
 
   const executeDoorAction = async (reply: GeminiAssistantReply): Promise<string> => {
-    const door = (reply.door || 'main').toLowerCase();
+    const door = normalizeDoorKey(reply.door);
     switch (reply.action) {
       case 'door.lock':
       case 'door.unlock': {
@@ -387,26 +439,21 @@ export default function VoiceControlScreen() {
 
         <View style={styles.quickCommands}>
           <Text style={styles.quickCommandsTitle}>Quick Commands:</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <TouchableOpacity 
-              style={styles.quickCommand}
-              onPress={() => handleVoiceCommand('Turn on all lights')}
-            >
-              <Text style={styles.quickCommandText}>Turn on all lights</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.quickCommand}
-              onPress={() => handleVoiceCommand('Show power usage')}
-            >
-              <Text style={styles.quickCommandText}>Show power usage</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.quickCommand}
-              onPress={() => handleVoiceCommand('Turn off AC')}
-            >
-              <Text style={styles.quickCommandText}>Turn off AC</Text>
-            </TouchableOpacity>
-          </ScrollView>
+          <View style={styles.quickCommandList}>
+            {QUICK_COMMANDS.map((cmd) => (
+              <TouchableOpacity
+                key={cmd.label}
+                style={[
+                  styles.quickCommand,
+                  cmd.tone === 'positive' && styles.quickCommandPositive,
+                  cmd.tone === 'negative' && styles.quickCommandNegative,
+                ]}
+                onPress={() => handleVoiceCommand(cmd.phrase)}
+              >
+                <Text style={styles.quickCommandText}>{cmd.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
       </View>
     </View>
@@ -524,12 +571,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  quickCommandList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   quickCommand: {
     backgroundColor: '#374151',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    marginRight: 8,
+  },
+  quickCommandPositive: {
+    backgroundColor: 'rgba(16,185,129,0.15)',
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  quickCommandNegative: {
+    backgroundColor: 'rgba(239,68,68,0.15)',
+    borderWidth: 1,
+    borderColor: '#EF4444',
   },
   quickCommandText: {
     color: '#D1D5DB',

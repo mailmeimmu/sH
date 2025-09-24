@@ -1,8 +1,7 @@
-// Simple remote API client (Node backend) for MySQL integration
-// Configure EXPO_PUBLIC_API_BASE in .env, e.g. http://YOUR_SERVER:8080
+// Simple remote API client (Node backend) for MySQL integration.
+// Backend base URL is fixed for the shared deployment.
 
-// @ts-ignore
-const RAW_API_BASE = process.env.EXPO_PUBLIC_API_BASE as string | undefined;
+const HARD_CODED_API_BASE = 'http://156.67.104.77:8080/api';
 
 function normalizeBase(base?: string) {
   if (!base) return '';
@@ -10,7 +9,7 @@ function normalizeBase(base?: string) {
   return trimmed;
 }
 
-const normalizedBase = normalizeBase(RAW_API_BASE);
+const normalizedBase = normalizeBase(HARD_CODED_API_BASE);
 const baseEndsWithApi = normalizedBase.endsWith('/api');
 
 function buildUrl(path: string) {

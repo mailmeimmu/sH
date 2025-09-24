@@ -10,10 +10,10 @@ let welcomeSpoken = false;
 
 export default function HomeControlScreen() {
   const [devices, setDevices] = useState({
-    room1: { light: false, fan: false, ac: false },
-    hall: { light: false, fan: false, ac: false },
+    mainhall: { lightA: false, lightB: false, fan: false, ac: false },
+    bedroom1: { light: false, fan: false, ac: false },
+    bedroom2: { light: false, fan: false, ac: false },
     kitchen: { light: false },
-    bathroom: { light: false },
   });
 
   useEffect(() => {
@@ -26,10 +26,10 @@ export default function HomeControlScreen() {
   const [powerUsage] = useState({
     total: 2.4,
     rooms: {
-      room1: 0.8,
-      hall: 0.6,
-      kitchen: 0.4,
-      bathroom: 0.15,
+      mainhall: 0.7,
+      bedroom1: 0.6,
+      bedroom2: 0.5,
+      kitchen: 0.2,
     }
   });
 
@@ -78,21 +78,28 @@ export default function HomeControlScreen() {
 
       <ScrollView style={styles.content}>
         <DeviceRoom 
-          title="Room 1" 
+          title="Main Hall" 
           icon={<Home size={20} color="#3B82F6" />}
-          devices={devices.room1} 
-          onToggle={(device) => toggleDevice('room1', device)}
-          powerUsage={powerUsage.rooms.room1}
-          showAll={true}
+          devices={devices.mainhall} 
+          onToggle={(device) => toggleDevice('mainhall', device)}
+          powerUsage={powerUsage.rooms.mainhall}
+          variant="mainhall"
         />
         
         <DeviceRoom 
-          title="Hall" 
+          title="Bedroom 1" 
           icon={<Home size={20} color="#3B82F6" />}
-          devices={devices.hall} 
-          onToggle={(device) => toggleDevice('hall', device)}
-          powerUsage={powerUsage.rooms.hall}
-          showAll={true}
+          devices={devices.bedroom1} 
+          onToggle={(device) => toggleDevice('bedroom1', device)}
+          powerUsage={powerUsage.rooms.bedroom1}
+        />
+        
+        <DeviceRoom 
+          title="Bedroom 2" 
+          icon={<Home size={20} color="#3B82F6" />}
+          devices={devices.bedroom2} 
+          onToggle={(device) => toggleDevice('bedroom2', device)}
+          powerUsage={powerUsage.rooms.bedroom2}
         />
         
         <DeviceRoom 
@@ -101,23 +108,14 @@ export default function HomeControlScreen() {
           devices={devices.kitchen} 
           onToggle={(device) => toggleDevice('kitchen', device)}
           powerUsage={powerUsage.rooms.kitchen}
-          showAll={false}
-        />
-        
-        <DeviceRoom 
-          title="Bathroom" 
-          icon={<Home size={20} color="#3B82F6" />}
-          devices={devices.bathroom} 
-          onToggle={(device) => toggleDevice('bathroom', device)}
-          powerUsage={powerUsage.rooms.bathroom}
-          showAll={false}
+          variant="kitchen"
         />
       </ScrollView>
     </View>
   );
 }
 
-function DeviceRoom({ title, icon, devices, onToggle, powerUsage, showAll }: any) {
+function DeviceRoom({ title, icon, devices, onToggle, powerUsage, variant }: any) {
   return (
     <View style={styles.roomContainer}>
       <View style={styles.roomHeader}>
@@ -129,24 +127,57 @@ function DeviceRoom({ title, icon, devices, onToggle, powerUsage, showAll }: any
       </View>
       
       <View style={styles.deviceGrid}>
-        <DeviceButton 
-          name="Light" 
-          icon={<Lightbulb size={20} color={devices.light ? "#F59E0B" : "#6B7280"} />}
-          isOn={devices.light} 
-          onPress={() => onToggle('light')}
-        />
-        
-        {showAll && (
+        {variant === 'mainhall' ? (
           <>
             <DeviceButton 
+              name="Light A" 
+              icon={<Lightbulb size={20} color={devices.lightA ? '#F59E0B' : '#6B7280'} />}
+              isOn={devices.lightA} 
+              onPress={() => onToggle('lightA')}
+            />
+            <DeviceButton 
+              name="Light B" 
+              icon={<Lightbulb size={20} color={devices.lightB ? '#F59E0B' : '#6B7280'} />}
+              isOn={devices.lightB} 
+              onPress={() => onToggle('lightB')}
+            />
+            <DeviceButton 
               name="Fan" 
-              icon={<Fan size={20} color={devices.fan ? "#8B5CF6" : "#6B7280"} />}
+              icon={<Fan size={20} color={devices.fan ? '#8B5CF6' : '#6B7280'} />}
               isOn={devices.fan} 
               onPress={() => onToggle('fan')}
             />
             <DeviceButton 
               name="AC" 
-              icon={<Thermometer size={20} color={devices.ac ? "#06B6D4" : "#6B7280"} />}
+              icon={<Thermometer size={20} color={devices.ac ? '#06B6D4' : '#6B7280'} />}
+              isOn={devices.ac} 
+              onPress={() => onToggle('ac')}
+            />
+          </>
+        ) : variant === 'kitchen' ? (
+          <DeviceButton 
+            name="Light" 
+            icon={<Lightbulb size={20} color={devices.light ? '#F59E0B' : '#6B7280'} />}
+            isOn={devices.light} 
+            onPress={() => onToggle('light')}
+          />
+        ) : (
+          <>
+            <DeviceButton 
+              name="Light" 
+              icon={<Lightbulb size={20} color={devices.light ? '#F59E0B' : '#6B7280'} />}
+              isOn={devices.light} 
+              onPress={() => onToggle('light')}
+            />
+            <DeviceButton 
+              name="Fan" 
+              icon={<Fan size={20} color={devices.fan ? '#8B5CF6' : '#6B7280'} />}
+              isOn={devices.fan} 
+              onPress={() => onToggle('fan')}
+            />
+            <DeviceButton 
+              name="AC" 
+              icon={<Thermometer size={20} color={devices.ac ? '#06B6D4' : '#6B7280'} />}
               isOn={devices.ac} 
               onPress={() => onToggle('ac')}
             />

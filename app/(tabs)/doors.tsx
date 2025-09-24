@@ -1,8 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { Lock, Unlock, List } from 'lucide-react-native';
-import { db } from '../../services/database';
+import { db, DOOR_KEYS, DOOR_LABELS } from '../../services/database';
 import remoteApi from '../../services/remote';
+
+const DOOR_ORDER = DOOR_KEYS;
+
+const filterDoors = (source: Record<string, any> = {}) => {
+  const result: Record<string, boolean> = {};
+  DOOR_KEYS.forEach((door) => {
+    if (Object.prototype.hasOwnProperty.call(source, door)) {
+      result[door] = !!source[door];
+    } else {
+      result[door] = true;
+    }
+  });
+  return result;
+};
 
 export default function DoorsScreen() {
   const [doors, setDoors] = useState<any>({});
@@ -10,35 +24,81 @@ export default function DoorsScreen() {
 
   useEffect(() => {
     let mounted = true;
+
+    const applySnapshot = (snapshot: Record<string, any>) => {
+      if (!mounted) return;
+      setDoors(filterDoors(snapshot));
+    };
+
+    const unsubscribe = db.onDoorChange ? db.onDoorChange((snapshot: Record<string, boolean>) => applySnapshot(snapshot || {})) : undefined;
+
     const load = async () => {
       if (remoteApi.enabled) {
-        try { const snap = await remoteApi.getDoors(); if (mounted) setDoors(snap); } catch {}
+        try {
+          const snap = await remoteApi.getDoors();
+          applySnapshot(snap || {});
+          db.setDoorStates(filterDoors(snap || {}));
+        } catch {}
       } else {
-        const snap = Object.fromEntries(db.getAllDoors().map((k)=>[k, db.getDoorState(k)]));
-        if (mounted) setDoors(snap as any);
+        applySnapshot(db.getDoorsSnapshot ? db.getDoorsSnapshot() : {});
       }
     };
+
     load();
-    return () => { mounted = false; };
+
+    return () => {
+      mounted = false;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
   }, []);
 
   const toggle = async (name: string) => {
     if (remoteApi.enabled) {
-      try { const r:any = await remoteApi.toggleDoor(name); setDoors((prev:any)=>({ ...prev, [name]: r.locked })); } catch (e:any) { Alert.alert('Door', e.message || 'Not allowed'); }
+      try {
+        const result: any = await remoteApi.toggleDoor(name);
+        db.setDoorState(name, !!result?.locked);
+      } catch (e:any) {
+        Alert.alert('Door', e.message || 'Not allowed');
+      }
     } else {
       const res = db.toggleDoor(name);
-      if (!res.success) { Alert.alert('Door', res.error || 'Not allowed'); return; }
-      setDoors((prev:any)=>({ ...prev, [name]: res.locked }));
+      if (!res.success) {
+        Alert.alert('Door', res.error || 'Not allowed');
+      }
     }
   };
 
   const lockAll = async () => {
-    if (remoteApi.enabled) { try { await remoteApi.lockAllDoors(); setDoors((prev:any)=>Object.fromEntries(Object.keys(prev).map(k=>[k,true])) as any); } catch (e:any) { Alert.alert('Door', e.message || 'Failed'); } }
-    else { const r = db.lockAllDoors(); if (!r.success) { Alert.alert('Door', r.error); return; } setDoors((prev:any)=>Object.fromEntries(Object.keys(prev).map(k=>[k,true])) as any); }
+    if (remoteApi.enabled) {
+      try {
+        await remoteApi.lockAllDoors();
+        const nextState = DOOR_KEYS.reduce((acc, key) => ({ ...acc, [key]: true }), {} as Record<string, boolean>);
+        db.setDoorStates(nextState);
+      } catch (e:any) {
+        Alert.alert('Door', e.message || 'Failed');
+      }
+    } else {
+      const r = db.lockAllDoors();
+      if (!r.success) {
+        Alert.alert('Door', r.error);
+      }
+    }
   };
   const unlockAll = async () => {
-    if (remoteApi.enabled) { try { await remoteApi.unlockAllDoors(); setDoors((prev:any)=>Object.fromEntries(Object.keys(prev).map(k=>[k,false])) as any); } catch (e:any) { Alert.alert('Door', e.message || 'Failed'); } }
-    else { const r = db.unlockAllDoors(); if (!r.success) { Alert.alert('Door', r.error); return; } setDoors((prev:any)=>Object.fromEntries(Object.keys(prev).map(k=>[k,false])) as any); }
+    if (remoteApi.enabled) {
+      try {
+        await remoteApi.unlockAllDoors();
+        const nextState = DOOR_KEYS.reduce((acc, key) => ({ ...acc, [key]: false }), {} as Record<string, boolean>);
+        db.setDoorStates(nextState);
+      } catch (e:any) {
+        Alert.alert('Door', e.message || 'Failed');
+      }
+    } else {
+      const r = db.unlockAllDoors();
+      if (!r.success) {
+        Alert.alert('Door', r.error);
+      }
+    }
   };
 
   return (
@@ -52,7 +112,10 @@ export default function DoorsScreen() {
       </View>
 
       <ScrollView style={styles.content}>
-        {Object.keys(doors).map((name) => (
+        {Object.keys(doors)
+          .filter((name) => DOOR_ORDER.includes(name))
+          .sort((a, b) => DOOR_ORDER.indexOf(a) - DOOR_ORDER.indexOf(b))
+          .map((name) => (
           <View key={name} style={styles.doorRow}>
             <Text style={styles.doorLabel}>{labelize(name)}</Text>
             <TouchableOpacity style={[styles.lockButton, doors[name] ? styles.locked : styles.unlocked]} onPress={()=>toggle(name)}>
@@ -78,7 +141,9 @@ export default function DoorsScreen() {
   );
 }
 
-function labelize(k:string) { return k.charAt(0).toUpperCase() + k.slice(1); }
+function labelize(key: string) {
+  return DOOR_LABELS[key as keyof typeof DOOR_LABELS] || key.charAt(0).toUpperCase() + key.slice(1);
+}
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111827' },

@@ -2,6 +2,15 @@
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 
+export const DOOR_LABELS = {
+  mainhall: 'Main Hall',
+  bedroom1: 'Bedroom 1',
+  bedroom2: 'Bedroom 2',
+  kitchen: 'Kitchen',
+};
+
+export const DOOR_KEYS = Object.keys(DOOR_LABELS);
+
 function openDb() {
   try {
     // Use classic WebSQL-style API for broad compatibility (Expo Go, Dev Client)
@@ -46,18 +55,7 @@ class DatabaseService {
 
     // Simple in-memory door lock model
     // true = locked, false = unlocked
-    this.doorLocks = new Map([
-      ['main', true],
-      ['front', true],
-      ['back', true],
-      ['garage', true],
-      ['room1', true],
-      ['hall', true],
-      ['kitchen', true],
-      ['bathroom', true],
-      ['bedroom1', true],
-      ['bedroom2', true],
-    ]);
+    this.doorLocks = new Map(DOOR_KEYS.map((door) => [door, true]));
     
     // Family members
     this.members = new Map();
@@ -79,6 +77,30 @@ class DatabaseService {
 
   initializeDemoUsers() {
     // No demo users by default
+  }
+
+  ensurePolicyShape(role, policies) {
+    const defaults = this.defaultPolicies(role || 'member');
+    if (!policies) return defaults;
+
+    const normalized = {
+      controls: { ...defaults.controls, ...(policies.controls || {}) },
+      areas: {},
+    };
+
+    const defaultAreas = defaults.areas || {};
+    const providedAreas = policies.areas || {};
+    const areaKeys = new Set([...Object.keys(defaultAreas), ...Object.keys(providedAreas)]);
+    areaKeys.forEach((key) => {
+      const base = defaultAreas[key] || {};
+      const provided = providedAreas[key] || {};
+      normalized.areas[key] = { ...base, ...provided };
+      if (base.fan !== undefined && normalized.areas[key].fan === undefined) {
+        normalized.areas[key].fan = base.fan;
+      }
+    });
+
+    return normalized;
   }
 
   async initializeStorage() {
@@ -105,20 +127,73 @@ class DatabaseService {
     // Load persisted members
     const rows = await queryAll(this.db, 'SELECT * FROM members');
     for (const r of rows) {
-      const m = { id: r.id, name: r.name, email: r.email, role: r.role, relation: r.relation, pin: r.pin, preferredLogin: r.preferredLogin, policies: r.policies ? JSON.parse(r.policies) : this.defaultPolicies(r.role), faceId: r.faceId, faceTemplate: r.faceTemplate, registeredAt: r.registeredAt };
+      const rawPolicies = r.policies ? JSON.parse(r.policies) : null;
+      const normalizedPolicies = this.ensurePolicyShape(r.role, rawPolicies);
+      const m = { id: r.id, name: r.name, email: r.email, role: r.role, relation: r.relation, pin: r.pin, preferredLogin: r.preferredLogin, policies: normalizedPolicies, faceId: r.faceId, faceTemplate: r.faceTemplate, registeredAt: r.registeredAt };
       this.members.set(m.id, m);
       this.users.set(m.id, m);
       if (m.faceTemplate) this.faceData.set(m.faceTemplate, m.id);
+      if (rawPolicies && this.db) {
+        exec(this.db, 'UPDATE members SET policies=? WHERE id=?', [JSON.stringify(normalizedPolicies), m.id]).catch(() => {});
+      }
     }
 
     // Load door states (fallback to defaults)
+    const allowedDoors = Array.from(this.doorLocks.keys());
     const doors = await queryAll(this.db, 'SELECT door, locked FROM door_state');
     if (doors.length) {
-      for (const d of doors) this.doorLocks.set(d.door, !!d.locked);
+      const seen = new Set();
+      for (const d of doors) {
+        if (allowedDoors.includes(d.door)) {
+          this.doorLocks.set(d.door, !!d.locked);
+          seen.add(d.door);
+        }
+      }
+      for (const door of allowedDoors) {
+        if (!seen.has(door)) {
+          await exec(this.db, 'INSERT OR REPLACE INTO door_state (door, locked) VALUES (?,?)', [door, 1]);
+          this.doorLocks.set(door, true);
+        }
+      }
     } else {
       for (const [k, v] of this.doorLocks.entries()) {
         await exec(this.db, 'INSERT OR REPLACE INTO door_state (door, locked) VALUES (?,?)', [k, v ? 1 : 0]);
       }
+    }
+
+    if (this.members.size === 0) {
+      const adminUser = {
+        id: 'admin-default',
+        name: 'Admin User',
+        email: 'admin@example.com',
+        role: 'admin',
+        relation: 'owner',
+        pin: '123456',
+        preferredLogin: 'pin',
+        policies: this.defaultPolicies('admin'),
+        registeredAt: new Date().toISOString(),
+      };
+      this.members.set(adminUser.id, adminUser);
+      this.users.set(adminUser.id, adminUser);
+      this.currentUser = adminUser;
+      if (this.db) {
+        await exec(this.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+          adminUser.id,
+          adminUser.name,
+          adminUser.email,
+          adminUser.role,
+          adminUser.relation,
+          adminUser.pin,
+          adminUser.preferredLogin,
+          JSON.stringify(adminUser.policies),
+          '',
+          '',
+          adminUser.registeredAt,
+        ]);
+      }
+    } else if (!this.currentUser) {
+      const firstMember = Array.from(this.members.values())[0];
+      if (firstMember) this.currentUser = firstMember;
     }
   }
 
@@ -135,6 +210,11 @@ class DatabaseService {
       preferredLogin: 'pin',
       registeredAt: new Date().toISOString()
     };
+
+    user.policies = this.ensurePolicyShape(user.role, userData.policies);
+    if (isFirst) {
+      user.policies = this.defaultPolicies('parent');
+    }
 
     // Duplicate face check: if template matches an existing user, abort
     for (const [template, uid] of this.faceData.entries()) {
@@ -159,11 +239,6 @@ class DatabaseService {
         ]);
       }
     } catch {}
-    if (isFirst) {
-      // First registered user becomes the household owner/parent
-      user.policies = this.defaultPolicies('parent');
-    }
-    
     return { success: true, user };
   }
 
@@ -229,12 +304,13 @@ class DatabaseService {
 
   saveRemoteUser(user, templateStr, faceId) {
     if (!user || !user.id) return;
+    const normalizedPolicies = this.ensurePolicyShape(user.role || 'member', user.policies || this.users.get(user.id)?.policies);
     const merged = {
       ...this.users.get(user.id),
       ...user,
       faceId: faceId || user.faceId || (this.users.get(user.id)?.faceId) || '',
       faceTemplate: templateStr || this.users.get(user.id)?.faceTemplate || '',
-      policies: user.policies || this.users.get(user.id)?.policies || this.defaultPolicies(user.role || 'member'),
+      policies: normalizedPolicies,
       registeredAt: user.registeredAt || user.registered_at || this.users.get(user.id)?.registeredAt || new Date().toISOString(),
     };
     this.users.set(user.id, merged);
@@ -252,7 +328,7 @@ class DatabaseService {
       }
     }
     remotes.forEach((member) => {
-      const policies = member.policies || this.defaultPolicies(member.role || 'member');
+      const policies = this.ensurePolicyShape(member.role || 'member', member.policies);
       const stored = {
         ...this.members.get(member.id),
         ...member,
@@ -276,26 +352,23 @@ class DatabaseService {
   }
 
   // --- Family management ---
-  defaultPolicies(role) {
-    const isAdmin = role === 'admin';
-    const base = {
-      controls: { devices: true, doors: true, unlockDoors: role === 'parent' || isAdmin, voice: true, power: true },
+  defaultPolicies(_role) {
+    const areaPermissions = { light: true, fan: true, ac: true, door: true };
+    return {
+      controls: {
+        devices: true,
+        doors: true,
+        unlockDoors: true,
+        voice: true,
+        power: true,
+      },
       areas: {
-        hall: { light: isAdmin, ac: isAdmin, door: isAdmin },
-        kitchen: { light: isAdmin, ac: isAdmin, door: isAdmin },
-        bedroom: { light: isAdmin, ac: isAdmin, door: isAdmin },
-        bathroom: { light: isAdmin, ac: isAdmin, door: isAdmin },
-        main: { door: role === 'parent' || isAdmin },
+        mainhall: { ...areaPermissions },
+        bedroom1: { ...areaPermissions },
+        bedroom2: { ...areaPermissions },
+        kitchen: { ...areaPermissions },
       },
     };
-    if (role === 'parent' || isAdmin) {
-      base.areas.hall = { light: true, ac: true, door: true };
-      base.areas.kitchen = { light: true, ac: true, door: true };
-      base.areas.bedroom = { light: true, ac: true, door: true };
-      base.areas.bathroom = { light: true, ac: true, door: true };
-      base.areas.main = { door: true };
-    }
-    return base;
   }
 
   addMember({ name, role = 'member', relation = 'member', email = '', pin = '' }) {
@@ -321,7 +394,8 @@ class DatabaseService {
         }
       }
     }
-    const updated = { ...m, ...updates, policies: newPolicies };
+    const updatedPolicies = this.ensurePolicyShape(updates.role || m.role, newPolicies);
+    const updated = { ...m, ...updates, policies: updatedPolicies };
     this.members.set(id, updated);
     this.users.set(id, updated);
     // Persist
@@ -382,25 +456,21 @@ class DatabaseService {
   }
 
   roomToArea(room) {
-    switch (room) {
-      case 'room1': return 'bedroom';
-      case 'hall': return 'hall';
-      case 'kitchen': return 'kitchen';
-      case 'bathroom': return 'bathroom';
-      default: return 'hall';
-    }
+    const value = (room || '').toString().toLowerCase();
+    if (value.includes('bedroom 2') || value.includes('room 2') || value === 'bedroom2') return 'bedroom2';
+    if (value.includes('bedroom 1') || value.includes('room 1') || value === 'bedroom1' || value.includes('bedroom')) return 'bedroom1';
+    if (value.includes('kitchen')) return 'kitchen';
+    if (value.includes('main') || value.includes('hall') || value.includes('living')) return 'mainhall';
+    return 'mainhall';
   }
 
   doorToArea(door) {
-    switch (door) {
-      case 'main': return 'main';
-      case 'front': return 'hall';
-      case 'back': return 'kitchen';
-      case 'garage': return 'garage';
-      case 'bathroom': return 'bathroom';
-      case 'room1': return 'bedroom';
-      default: return 'hall';
-    }
+    const value = (door || '').toString().toLowerCase();
+    if (value.includes('bedroom 2') || value === 'bedroom2') return 'bedroom2';
+    if (value.includes('bedroom 1') || value === 'bedroom1') return 'bedroom1';
+    if (value.includes('kitchen')) return 'kitchen';
+    if (value.includes('main') || value.includes('hall') || value === 'mainhall') return 'mainhall';
+    return 'mainhall';
   }
 
   canDevice(room, device) {
@@ -462,37 +532,88 @@ class DatabaseService {
     }
   }
 
+  async persistDoorState(door, locked) {
+    try {
+      await this.readyPromise;
+      if (this.db) {
+        await exec(this.db, 'INSERT OR REPLACE INTO door_state (door,locked) VALUES (?,?)', [door, locked ? 1 : 0]);
+      }
+    } catch {}
+  }
+
+  setDoorState(name, locked, options = {}) {
+    if (!this.doorLocks.has(name)) return;
+    const value = !!locked;
+    const prev = this.doorLocks.get(name);
+    if (prev === value && !options.force) return;
+    this.doorLocks.set(name, value);
+    if (options.log) {
+      this.logDoorEvent(value ? 'lock' : 'unlock', name, this.currentUser?.id, true, options.reason);
+    }
+    if (options.persist !== false) {
+      (async () => {
+        await this.persistDoorState(name, value);
+      })();
+    }
+    if (options.emit !== false) {
+      this.emitDoorChange();
+    }
+  }
+
+  setDoorStates(states = {}, options = {}) {
+    let changed = false;
+    DOOR_KEYS.forEach((door) => {
+      if (Object.prototype.hasOwnProperty.call(states, door)) {
+        const value = !!states[door];
+        const prev = this.doorLocks.get(door);
+        if (prev !== value) {
+          this.doorLocks.set(door, value);
+          changed = true;
+          if (options.log) {
+            this.logDoorEvent(value ? 'lock' : 'unlock', door, this.currentUser?.id, true, options.reason);
+          }
+          if (options.persist !== false) {
+            (async () => {
+              await this.persistDoorState(door, value);
+            })();
+          }
+        }
+      }
+    });
+    if (changed && options.emit !== false) {
+      this.emitDoorChange();
+    }
+  }
+
   toggleDoor(name) {
     if (!this.doorLocks.has(name)) return { success: false, error: 'Unknown door' };
     const next = !this.doorLocks.get(name);
     const unlocking = next === false;
     if (!this.canDoorAction(name, unlocking)) {
-      this.logDoorEvent('denied', name, this.currentUser?.id, false, action);
+      this.logDoorEvent('denied', name, this.currentUser?.id, false, unlocking ? 'unlock' : 'lock');
       return { success: false, error: 'Not allowed' };
     }
-    this.doorLocks.set(name, next);
-    // Persist
-    (async () => { try { await this.readyPromise; if (this.db) await exec(this.db, 'INSERT OR REPLACE INTO door_state (door,locked) VALUES (?,?)', [name, next ? 1 : 0]); } catch {} })();
-    this.logDoorEvent(next ? 'lock' : 'unlock', name, this.currentUser?.id, true);
-    this.emitDoorChange();
+    this.setDoorState(name, next, { log: true, reason: 'toggle' });
     return { success: true, locked: next };
   }
 
   lockAllDoors() {
     if (!this.can('door.lockAll')) return { success: false, error: 'Not allowed' };
-    for (const k of this.doorLocks.keys()) this.doorLocks.set(k, true);
-    (async () => { try { await this.readyPromise; if (this.db) for (const k of this.doorLocks.keys()) await exec(this.db, 'INSERT OR REPLACE INTO door_state (door,locked) VALUES (?,?)', [k, 1]); } catch {} })();
+    this.setDoorStates(
+      Object.fromEntries(DOOR_KEYS.map((k) => [k, true])),
+      { log: true, reason: 'lockAll' }
+    );
     this.logDoorEvent('lockAll', '*', this.currentUser?.id, true);
-    this.emitDoorChange();
     return { success: true };
   }
 
   unlockAllDoors() {
     if (!this.can('door.unlockAll')) return { success: false, error: 'Not allowed' };
-    for (const k of this.doorLocks.keys()) this.doorLocks.set(k, false);
-    (async () => { try { await this.readyPromise; if (this.db) for (const k of this.doorLocks.keys()) await exec(this.db, 'INSERT OR REPLACE INTO door_state (door,locked) VALUES (?,?)', [k, 0]); } catch {} })();
+    this.setDoorStates(
+      Object.fromEntries(DOOR_KEYS.map((k) => [k, false])),
+      { log: true, reason: 'unlockAll' }
+    );
     this.logDoorEvent('unlockAll', '*', this.currentUser?.id, true);
-    this.emitDoorChange();
     return { success: true };
   }
 

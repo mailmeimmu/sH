@@ -1,7 +1,5 @@
 // Simple Google Gemini API client for Expo/React Native
 
-const HARDCODED_GEMINI_API_KEY = 'AIzaSyBvo8Sn5aJbELzBqN3UJBNZO9T2vWZOC00';
-
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 export type GeminiAction =
@@ -23,28 +21,43 @@ export type GeminiAssistantReply = {
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
+const RAW_API_BASE = 'http://156.67.104.77:8080/api';
+
+function buildAssistantUrl() {
+  if (!RAW_API_BASE) return null;
+  const trimmed = RAW_API_BASE.trim().replace(/\/+$/, '');
+  if (!trimmed) return null;
+  if (trimmed.endsWith('/api')) return `${trimmed}/assistant`;
+  return `${trimmed}/api/assistant`;
+}
+
+const ASSISTANT_URL = buildAssistantUrl();
+
 function getApiKey() {
-  return HARDCODED_GEMINI_API_KEY;
+  return 'AIzaSyBvo8Sn5aJbELzBqN3UJBNZO9T2vWZOC00';
 }
 
 function buildPrompt(userText: string) {
   // System-style instruction embedded into the first user turn.
   const system = `You are Smart Home By Nafisa Tabasum voice assistant.
-You can answer general questions and also control of doors and devices. Always end your reply with a single JSON command on the last line only.
+Speak naturally and helpfully.
 
-If the user is asking a general question, use the 'none' action.
+Response format (always in this order):
+1. Conversational reply for the user. Do not mention commands or formatting rules.
+2. A single line starting with "COMMAND:" followed by key=value pairs separated by semicolons.
 
-Supported JSON schema (choose one):
-- {"action":"door.lock|door.unlock|door.lock_all|door.unlock_all","door":"main|front|back|garage|bathroom|room1|hall|kitchen|bedroom|*","say":"..."}
-- {"action":"device.set","room":"hall|kitchen|bedroom|bathroom|room1","device":"light|ac|fan","value":"on|off","say":"..."}
-- {"action":"none","say":"..."}
+Example: COMMAND: action=device.set; room=mainhall; device=light; value=on
 
-Rules:
-- Only output one JSON object on the last line (no code fences, no extra text after it).
-- Do not prefix the JSON with words like json or wrap it in any quotes or fences.
-- For "home light" assume room=hall.
-- For generic lights with no room specified, prefer room=hall.
-`;
+Rules for the COMMAND line:
+- Supported actions: device.set, door.lock, door.unlock, door.lock_all, door.unlock_all, none.
+- Only include keys that matter (action is required; room/device/value/door are optional).
+- Use lowercase for keys and values. Do not wrap values in quotes.
+- If no smart-home action is needed, output exactly: COMMAND: action=none
+- Never output JSON, code fences, or prefixes such as "json".
+- For "home" or "living room" references, treat as room=mainhall.
+- For unspecified lights, prefer room=mainhall.
+
+You may answer any question before the COMMAND line.`;
   return `${system}\n\nUser: ${userText}`;
 }
 
@@ -83,6 +96,34 @@ function findJsonCommandBlock(text: string): { json: string; start: number; end:
   return found;
 }
 
+function parseCommandLine(line: string): Record<string, string> | null {
+  if (!line) return null;
+  const match = line.trim().match(/^COMMAND:\s*(.*)$/i);
+  if (!match) return null;
+  const body = match[1];
+  if (!body) return null;
+  const pairs = body
+    .split(/;+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (!pairs.length) return null;
+  const result: Record<string, string> = {};
+  for (const pair of pairs) {
+    const [rawKey, ...rest] = pair.split('=');
+    if (!rawKey || !rest.length) continue;
+    const key = rawKey.trim().toLowerCase();
+    const rawValue = rest.join('=').trim();
+    if (!rawValue) continue;
+    const normalizedValue = key === 'say' ? rawValue.trim() : rawValue.trim().toLowerCase();
+    result[key] = normalizedValue;
+  }
+  if (!Object.keys(result).length) return null;
+  if (!result.action) {
+    result.action = 'none';
+  }
+  return result;
+}
+
 function stripCommandArtifacts(text: string): string {
   const lines = text.split('\n');
   while (lines.length) {
@@ -93,6 +134,10 @@ function stripCommandArtifacts(text: string): string {
     }
     const trimmed = lastRaw.trim();
     if (!trimmed) {
+      lines.pop();
+      continue;
+    }
+    if (/^COMMAND:/i.test(trimmed)) {
       lines.pop();
       continue;
     }
@@ -121,14 +166,27 @@ function extractAssistantCommand(partText: string): { payload: Record<string, an
   let payload: Record<string, any> | null = null;
   let remainder = trimmed;
 
-  const block = findJsonCommandBlock(trimmed);
-  if (block) {
-    const candidate = sanitizeJsonCandidate(block.json);
-    try {
-      payload = JSON.parse(candidate);
-      remainder = (trimmed.slice(0, block.start) + trimmed.slice(block.end)).trim();
-    } catch (error) {
-      payload = null;
+  const lines = trimmed.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const parsed = parseCommandLine(lines[i]);
+    if (parsed) {
+      payload = parsed;
+      lines.splice(i, 1);
+      remainder = lines.join('\n').trim();
+      break;
+    }
+  }
+
+  if (!payload) {
+    const block = findJsonCommandBlock(trimmed);
+    if (block) {
+      const candidate = sanitizeJsonCandidate(block.json);
+      try {
+        payload = JSON.parse(candidate);
+        remainder = (trimmed.slice(0, block.start) + trimmed.slice(block.end)).trim();
+      } catch (error) {
+        payload = null;
+      }
     }
   }
 
@@ -161,9 +219,35 @@ function extractAssistantCommand(partText: string): { payload: Record<string, an
 }
 
 export async function askGemini(userText: string, history: ChatMessage[] = []): Promise<GeminiAssistantReply> {
+  if (ASSISTANT_URL) {
+    try {
+      const res = await fetch(ASSISTANT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: userText, history }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        return {
+          action: (data?.action as GeminiAction) || 'none',
+          say: typeof data?.say === 'string' && data.say.trim() ? data.say.trim() : 'Okay.',
+          room: typeof data?.room === 'string' ? data.room : undefined,
+          device: typeof data?.device === 'string' ? data.device : undefined,
+          value: typeof data?.value === 'string' ? data.value : undefined,
+          door: typeof data?.door === 'string' ? data.door : undefined,
+        };
+      }
+      if (data?.error) {
+        return { say: String(data.error).trim(), action: 'none' };
+      }
+    } catch (error: any) {
+      console.log('[gemini] backend call failed, falling back to direct API:', error?.message || error);
+    }
+  }
+
   const apiKey = getApiKey();
   if (!apiKey) {
-    return { say: 'Gemini API key not configured.', action: 'none' };
+    return { say: 'Assistant service unavailable (no API key).', action: 'none' };
   }
 
   const contents = [] as any[];
@@ -207,9 +291,11 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
 
   const { payload, remainder } = extractAssistantCommand(partText);
 
-  const sayText = (typeof payload?.say === 'string' && payload.say.trim().length)
-    ? payload.say.trim()
-    : remainder || partText.trim();
+  const primarySay = remainder.trim();
+  const secondarySay = typeof payload?.say === 'string' ? payload.say.trim() : '';
+  const rawFallback = partText.trim();
+  const fallbackSay = /^COMMAND:/i.test(rawFallback) ? '' : rawFallback;
+  const sayText = primarySay || secondarySay || fallbackSay || 'Okay.';
 
   const action = typeof payload?.action === 'string' ? (payload.action as string).trim() : 'none';
 

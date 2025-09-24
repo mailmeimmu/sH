@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, RefreshCon
 import { Screen, Container, SectionCard } from '../../components/Layout';
 import { Home as HomeIcon, Lightbulb, Fan as FanIcon, Thermometer, Zap, Mic, Lock, Unlock, LogOut, Volume2 } from 'lucide-react-native';
 import { router } from 'expo-router';
-import { db } from '../../services/database';
+import { db, DOOR_KEYS, DOOR_LABELS } from '../../services/database';
 import remoteApi, { type DeviceState } from '../../services/remote';
 import theme from '../../theme';
 import { voiceService } from '../../services/voice';
@@ -30,7 +30,7 @@ const DEVICE_ZONES: ZoneDescriptor[] = [
   {
     id: 'main-hall',
     title: 'Main Hall',
-    permissionKey: 'hall',
+    permissionKey: 'mainhall',
     icon: HomeIcon,
     devices: [
       { id: 'mainhall-light-1', label: 'Light A', type: 'light' },
@@ -42,7 +42,7 @@ const DEVICE_ZONES: ZoneDescriptor[] = [
   {
     id: 'bedroom-1',
     title: 'Bedroom 1',
-    permissionKey: 'room1',
+    permissionKey: 'bedroom1',
     icon: HomeIcon,
     devices: [
       { id: 'bedroom1-light-1', label: 'Light', type: 'light' },
@@ -53,7 +53,7 @@ const DEVICE_ZONES: ZoneDescriptor[] = [
   {
     id: 'bedroom-2',
     title: 'Bedroom 2',
-    permissionKey: 'room1',
+    permissionKey: 'bedroom2',
     icon: HomeIcon,
     devices: [
       { id: 'bedroom2-light-1', label: 'Light', type: 'light' },
@@ -92,6 +92,29 @@ const DEVICE_LOOKUP: Record<string, { device: DeviceDescriptor; zone: ZoneDescri
 
 const ALL_DEVICE_IDS = Object.keys(DEVICE_LOOKUP);
 
+const DOOR_ITEMS = DOOR_KEYS.map((key) => ({
+  key,
+  label: DOOR_LABELS[key as keyof typeof DOOR_LABELS] || key,
+}));
+
+const filterDoors = (source: Record<string, any> = {}) => {
+  const result: Record<string, boolean> = {};
+  DOOR_KEYS.forEach((door) => {
+    if (Object.prototype.hasOwnProperty.call(source, door)) {
+      result[door] = !!source[door];
+    } else {
+      result[door] = true;
+    }
+  });
+  return result;
+};
+
+const createDoorState = (value: boolean) =>
+  DOOR_KEYS.reduce((acc, key) => {
+    acc[key] = value;
+    return acc;
+  }, {} as Record<string, boolean>);
+
 export default function HomeControlScreen() {
   const [deviceStates, setDeviceStates] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
@@ -100,7 +123,7 @@ export default function HomeControlScreen() {
   });
   const [loadingDevices, setLoadingDevices] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [doors, setDoors] = useState<Record<string, boolean>>({ main: true, front: true, back: true, garage: true });
+  const [doors, setDoors] = useState<Record<string, boolean>>(() => filterDoors());
   const [vaListening, setVaListening] = useState(false);
   const [vaSpeaking, setVaSpeaking] = useState(false);
 
@@ -108,18 +131,15 @@ export default function HomeControlScreen() {
     if (remoteApi.enabled) {
       try {
         const snapshot = await remoteApi.getDoors();
-        setDoors(snapshot as Record<string, boolean>);
+        const filtered = filterDoors(snapshot as Record<string, any>);
+        setDoors(filtered);
+        db.setDoorStates(filtered);
         return;
       } catch (e) {
         console.warn('[Home] failed to fetch doors', e);
       }
     }
-    setDoors({
-      main: db.getDoorState('main'),
-      front: db.getDoorState('front'),
-      back: db.getDoorState('back'),
-      garage: db.getDoorState('garage'),
-    } as Record<string, boolean>);
+    setDoors(filterDoors(db.getDoorsSnapshot ? db.getDoorsSnapshot() : {}));
   }, []);
 
   const loadDeviceStates = useCallback(async () => {
@@ -145,6 +165,15 @@ export default function HomeControlScreen() {
   useEffect(() => {
     loadDoorStates();
   }, [loadDoorStates]);
+
+  useEffect(() => {
+    const unsubscribe = db.onDoorChange ? db.onDoorChange((snapshot: Record<string, boolean>) => {
+      setDoors(filterDoors(snapshot || {}));
+    }) : undefined;
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     loadDeviceStates();
@@ -220,10 +249,10 @@ export default function HomeControlScreen() {
   const mapRoom = (room?: string) => {
     if (!room) return 'main-hall';
     const value = room.toLowerCase();
-    if (value.includes('hall') || value.includes('main')) return 'main-hall';
     if (value.includes('kitchen')) return 'kitchen';
-    if (value.includes('bedroom 2') || value.includes('room 2')) return 'bedroom-2';
-    if (value.includes('bedroom') || value.includes('room')) return 'bedroom-1';
+    if (value.includes('bedroom 2') || value.includes('room 2') || value.includes('second bedroom')) return 'bedroom-2';
+    if (value.includes('bedroom 1') || value.includes('room 1') || value.includes('first bedroom') || value.includes('bedroom')) return 'bedroom-1';
+    if (value.includes('main') || value.includes('hall') || value.includes('living')) return 'main-hall';
     return 'main-hall';
   };
 
@@ -238,21 +267,109 @@ export default function HomeControlScreen() {
         await setDevicesForZone(zoneId, type, value === 'off' ? 'off' : 'on');
         await voiceService.speak(reply.say || `Turning ${value} ${type} in ${ZONE_LOOKUP[zoneId]?.title || 'home'}`);
       } else if (reply.action?.startsWith('door.')) {
-        const door = (reply.door || 'main') as string;
+        const door = (reply.door || 'mainhall').toLowerCase();
         switch (reply.action) {
           case 'door.lock':
           case 'door.unlock': {
-            const res = db.toggleDoor(door);
-            await voiceService.speak(res.success ? (reply.say || 'Done.') : 'Action not allowed.');
+            const desiredLock = reply.action === 'door.lock';
+            let handled = false;
+            if (remoteApi.enabled) {
+              try {
+                const snapshot = await remoteApi.getDoors().catch(() => undefined);
+                let locked = typeof snapshot?.[door] === 'boolean' ? !!snapshot?.[door] : undefined;
+                if (locked !== desiredLock) {
+                  const result: any = await remoteApi.toggleDoor(door);
+                  if (typeof result?.locked === 'boolean') locked = !!result.locked;
+                  else locked = desiredLock;
+                } else if (locked === undefined) {
+                  const result: any = await remoteApi.toggleDoor(door);
+                  if (typeof result?.locked === 'boolean') locked = !!result.locked;
+                  else locked = desiredLock;
+                }
+                const finalLocked = typeof locked === 'boolean' ? locked : desiredLock;
+                setDoors((prev) => {
+                  const next = { ...prev } as Record<string, boolean>;
+                  next[door] = finalLocked;
+                  return next;
+                });
+                db.setDoorState(door, finalLocked);
+                await voiceService.speak(reply.say || (finalLocked ? 'Door locked.' : 'Door unlocked.'));
+                handled = true;
+              } catch (error: any) {
+                console.warn('[Assistant] remote door toggle failed', error?.message || error);
+              }
+            }
+
+            if (!handled) {
+              const res = db.toggleDoor(door);
+              if (res.success) {
+                const finalLocked = !!res.locked;
+                setDoors((prev) => {
+                  const next = { ...prev } as Record<string, boolean>;
+                  next[door] = finalLocked;
+                  return next;
+                });
+                db.setDoorState(door, finalLocked, { emit: true, persist: false });
+                await voiceService.speak(reply.say || (finalLocked ? 'Door locked.' : 'Door unlocked.'));
+              } else {
+                await voiceService.speak(res.error || 'Action not allowed.');
+              }
+            }
             break;
           }
           case 'door.lock_all':
-            db.lockAllDoors();
-            await voiceService.speak(reply.say || 'All doors locked.');
+            {
+              let handled = false;
+              if (remoteApi.enabled) {
+                try {
+                  await remoteApi.lockAllDoors();
+                  const nextState = createDoorState(true);
+                  setDoors(nextState);
+                  db.setDoorStates(nextState);
+                  await voiceService.speak(reply.say || 'All doors locked.');
+                  handled = true;
+                } catch (error: any) {
+                  console.warn('[Assistant] remote lock all failed', error?.message || error);
+                }
+              }
+              if (!handled) {
+                const res = db.lockAllDoors();
+                if (res.success) {
+                  const nextState = createDoorState(true);
+                  setDoors(nextState);
+                  await voiceService.speak(reply.say || 'All doors locked.');
+                } else {
+                  await voiceService.speak(res.error || 'Lock all action not allowed.');
+                }
+              }
+            }
             break;
           case 'door.unlock_all':
-            db.unlockAllDoors();
-            await voiceService.speak(reply.say || 'All doors unlocked.');
+            {
+              let handled = false;
+              if (remoteApi.enabled) {
+                try {
+                  await remoteApi.unlockAllDoors();
+                  const nextState = createDoorState(false);
+                  setDoors(nextState);
+                  db.setDoorStates(nextState);
+                  await voiceService.speak(reply.say || 'All doors unlocked.');
+                  handled = true;
+                } catch (error: any) {
+                  console.warn('[Assistant] remote unlock all failed', error?.message || error);
+                }
+              }
+              if (!handled) {
+                const res = db.unlockAllDoors();
+                if (res.success) {
+                  const nextState = createDoorState(false);
+                  setDoors(nextState);
+                  await voiceService.speak(reply.say || 'All doors unlocked.');
+                } else {
+                  await voiceService.speak(res.error || 'Unlock all action not allowed.');
+                }
+              }
+            }
             break;
           default:
             await voiceService.speak(reply.say || 'Okay.');
@@ -278,21 +395,33 @@ export default function HomeControlScreen() {
     router.replace('/login');
   };
 
-  const toggleDoor = async (name: keyof typeof doors) => {
+  const toggleDoor = async (name: string) => {
     if (remoteApi.enabled) {
       try {
-        const response: any = await remoteApi.toggleDoor(name as string);
-        setDoors((prev) => ({ ...prev, [name]: response.locked }));
+        const response: any = await remoteApi.toggleDoor(name);
+        const locked = !!response.locked;
+        db.setDoorState(name, locked);
+        setDoors((prev) => {
+          const next = { ...prev } as Record<string, boolean>;
+          next[name] = locked;
+          return next;
+        });
       } catch (e: any) {
         Alert.alert('Door', e?.message || 'Failed to toggle door');
       }
     } else {
-      const res = db.toggleDoor(name as string);
+      const res = db.toggleDoor(name);
       if (!res.success) {
         Alert.alert('Door', res.error || 'Action not allowed');
         return;
       }
-      setDoors((prev) => ({ ...prev, [name]: res.locked }));
+      const locked = !!res.locked;
+      db.setDoorState(name, locked, { persist: false });
+      setDoors((prev) => {
+        const next = { ...prev } as Record<string, boolean>;
+        next[name] = locked;
+        return next;
+      });
     }
   };
 
@@ -300,13 +429,15 @@ export default function HomeControlScreen() {
     if (remoteApi.enabled) {
       try {
         await remoteApi.lockAllDoors();
-        setDoors((prev) => Object.fromEntries(Object.keys(prev).map((key) => [key, true])) as Record<string, boolean>);
+        const nextState = createDoorState(true);
+        db.setDoorStates(nextState);
+        setDoors(nextState);
       } catch (e: any) {
         Alert.alert('Door', e?.message || 'Failed to lock doors');
       }
     } else {
       db.lockAllDoors();
-      setDoors((prev) => Object.fromEntries(Object.keys(prev).map((key) => [key, true])) as Record<string, boolean>);
+      setDoors(createDoorState(true));
     }
   };
 
@@ -314,7 +445,9 @@ export default function HomeControlScreen() {
     if (remoteApi.enabled) {
       try {
         await remoteApi.unlockAllDoors();
-        setDoors((prev) => Object.fromEntries(Object.keys(prev).map((key) => [key, false])) as Record<string, boolean>);
+        const nextState = createDoorState(false);
+        db.setDoorStates(nextState);
+        setDoors(nextState);
       } catch (e: any) {
         Alert.alert('Door', e?.message || 'Failed to unlock doors');
       }
@@ -324,7 +457,7 @@ export default function HomeControlScreen() {
         Alert.alert('Door', res.error || 'Action not allowed');
         return;
       }
-      setDoors((prev) => Object.fromEntries(Object.keys(prev).map((key) => [key, false])) as Record<string, boolean>);
+      setDoors(createDoorState(false));
     }
   };
 
@@ -337,6 +470,15 @@ export default function HomeControlScreen() {
     await Promise.all([loadDeviceStates(), loadDoorStates()]);
     setRefreshing(false);
   }, [loadDeviceStates, loadDoorStates]);
+
+  const lockedCount = useMemo(() => DOOR_KEYS.reduce((acc, key) => acc + (doors[key] ? 1 : 0), 0), [doors]);
+  const allLocked = lockedCount === DOOR_KEYS.length;
+  const allUnlocked = lockedCount === 0;
+  const doorSummary = allLocked
+    ? 'All doors locked'
+    : allUnlocked
+      ? 'All doors unlocked'
+      : `${lockedCount} of ${DOOR_KEYS.length} doors locked`;
 
   return (
     <Screen>
@@ -382,15 +524,35 @@ export default function HomeControlScreen() {
               <Lock size={20} color={theme.colors.brandPrimary} />
               <Text style={styles.sectionTitle}>Door Locks</Text>
             </View>
-            <View style={styles.lockRow}>
-              <Text style={styles.lockLabel}>Main Door</Text>
-              <TouchableOpacity style={[styles.lockButton, doors.main ? styles.locked : styles.unlocked]} onPress={() => toggleDoor('main')}>
-                {doors.main ? <Lock size={18} color={theme.colors.brandAccent} /> : <Unlock size={18} color={theme.colors.danger} />}
-                <Text style={[styles.lockText, doors.main ? styles.lockedText : styles.unlockedText]}>
-                  {doors.main ? 'Locked' : 'Unlocked'}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <Text
+              style={[
+                styles.lockSummary,
+                allLocked ? styles.lockedText : allUnlocked ? styles.unlockedText : styles.lockSummaryMixed,
+              ]}
+            >
+              {doorSummary}
+            </Text>
+            {DOOR_ITEMS.map(({ key, label }) => {
+              const locked = !!doors[key];
+              return (
+                <View key={key} style={styles.lockRow}>
+                  <Text style={styles.lockLabel}>{label}</Text>
+                  <TouchableOpacity
+                    style={[styles.lockButton, locked ? styles.locked : styles.unlocked]}
+                    onPress={() => toggleDoor(key)}
+                  >
+                    {locked ? (
+                      <Lock size={18} color={theme.colors.brandAccent} />
+                    ) : (
+                      <Unlock size={18} color={theme.colors.danger} />
+                    )}
+                    <Text style={[styles.lockText, locked ? styles.lockedText : styles.unlockedText]}>
+                      {locked ? 'Locked' : 'Unlocked'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
             <View style={styles.rowButtons}>
               <TouchableOpacity style={styles.secondaryButton} onPress={lockAllDoors}>
                 <Text style={styles.secondaryButtonText}>Lock All</Text>
@@ -486,6 +648,8 @@ const styles = StyleSheet.create({
   powerHint: { color: theme.colors.textSecondary, fontSize: 12 },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   sectionTitle: { color: theme.colors.textPrimary, fontSize: 16, fontWeight: '600' },
+  lockSummary: { marginBottom: 8, fontSize: 14, fontWeight: '600', color: theme.colors.textSecondary },
+  lockSummaryMixed: { color: theme.colors.warning },
   lockRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   lockLabel: { color: '#E5E7EB', fontSize: 16, fontWeight: '600' },
   lockButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
