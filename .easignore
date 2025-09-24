@@ -1,0 +1,15 @@
+# Ignore node_modules
+node_modules/
+
+# Ignore .git directory
+.git/
+
+# Ignore Android and iOS build directories
+android/
+ios/
+
+# Ignore log files
+*.log
+
+# Ignore expo cache
+.expo/
