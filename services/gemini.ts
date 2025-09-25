@@ -19,7 +19,13 @@ export type GeminiAssistantReply = {
   door?: string;
 };
 
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_MODELS = [
+  'gemini-1.5-flash',
+  'gemini-1.0-pro',
+  'gemini-pro'
+];
+
+const getGeminiEndpoint = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
 const RAW_API_BASE = process.env.EXPO_PUBLIC_API_BASE || '';
 
@@ -36,6 +42,26 @@ const ASSISTANT_URL = buildAssistantUrl();
 function getApiKey() {
   // Use the provided API key directly
   return 'AIzaSyAcLNrhvMSahZk7BKr-rL2cMZAUm545_X4';
+}
+
+async function tryGeminiModel(model, body, apiKey) {
+  console.log(`[Gemini] Trying model: ${model}`);
+  const endpoint = getGeminiEndpoint(model);
+  
+  const res = await fetch(`${endpoint}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (res.ok) {
+    console.log(`[Gemini] Success with model: ${model}`);
+    return { success: true, data: await res.json() };
+  } else {
+    const errorText = await res.text().catch(() => '');
+    console.log(`[Gemini] Failed with model ${model}:`, res.status, errorText);
+    return { success: false, status: res.status, error: errorText };
+  }
 }
 
 function buildPrompt(userText: string) {
@@ -273,66 +299,62 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   const body = {
     contents,
     generationConfig: { 
-      temperature: 0.7, 
-      topP: 0.9, 
-      maxOutputTokens: 512,
+      temperature: 0.3, 
+      topP: 0.8, 
+      maxOutputTokens: 256,
       candidateCount: 1
     },
   };
 
   console.log('[Gemini] Making API request to Google');
-  const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    console.log('[Gemini] API error:', res.status);
-    const rawText = await res.text().catch(() => '');
-    let message = rawText || res.statusText;
-    if (rawText) {
-      try {
-        const parsed = JSON.parse(rawText);
-        message = parsed?.error?.message || parsed?.message || message;
-      } catch {
-        message = rawText;
-      }
-    }
-    return {
-      say: `Gemini error ${res.status}: ${String(message).trim()}`,
-      action: 'none',
-    };
-  }
-
-  const data = await res.json();
-  console.log('[Gemini] API response received');
-  const candidate = data?.candidates?.[0];
-  const partText = candidate?.content?.parts?.[0]?.text as string | undefined;
-  if (!partText) {
-    console.log('[Gemini] No text in response');
-    return { say: 'Sorry, I could not process that request.', action: 'none' };
-  }
-
-  console.log('[Gemini] Processing response text');
-  const { payload, remainder } = extractAssistantCommand(partText);
-
-  const primarySay = remainder.trim();
-  const secondarySay = typeof payload?.say === 'string' ? payload.say.trim() : '';
-  const rawFallback = partText.trim();
-  const fallbackSay = /^COMMAND:/i.test(rawFallback) ? '' : rawFallback;
-  const sayText = primarySay || secondarySay || fallbackSay || 'Okay.';
-
-  console.log('[Gemini] Final response - action:', action, 'say:', sayText);
   
-  const action = typeof payload?.action === 'string' ? (payload.action as string).trim() : 'none';
+  // Try models in order until one works
+  let lastError = null;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const result = await tryGeminiModel(model, body, apiKey);
+      if (result.success) {
+        const data = result.data;
+        const candidate = data?.candidates?.[0];
+        const partText = candidate?.content?.parts?.[0]?.text as string | undefined;
+        if (!partText) {
+          console.log('[Gemini] No text in response from', model);
+          continue;
+        }
 
+        console.log(`[Gemini] Processing response from ${model}`);
+        const { payload, remainder } = extractAssistantCommand(partText);
+
+        const primarySay = remainder.trim();
+        const secondarySay = typeof payload?.say === 'string' ? payload.say.trim() : '';
+        const rawFallback = partText.trim();
+        const fallbackSay = /^COMMAND:/i.test(rawFallback) ? '' : rawFallback;
+        const sayText = primarySay || secondarySay || fallbackSay || 'Okay.';
+
+        const action = typeof payload?.action === 'string' ? (payload.action as string).trim() : 'none';
+
+        console.log(`[Gemini] Final response from ${model} - action:`, action, 'say:', sayText);
+        
+        return {
+          action: (action as GeminiAction) || 'none',
+          say: sayText,
+          room: typeof payload?.room === 'string' ? payload.room.trim() : undefined,
+          device: typeof payload?.device === 'string' ? payload.device.trim() : undefined,
+          value: typeof payload?.value === 'string' ? payload.value.trim() : undefined,
+          door: typeof payload?.door === 'string' ? payload.door.trim() : undefined,
+        };
+      }
+      lastError = result.error;
+    } catch (error) {
+      console.log(`[Gemini] Exception with model ${model}:`, error);
+      lastError = error.message || String(error);
+    }
+  }
+
+  // All models failed
+  console.log('[Gemini] All models failed, last error:', lastError);
   return {
-    action: (action as GeminiAction) || 'none',
-    say: sayText,
-    room: typeof payload?.room === 'string' ? payload.room.trim() : undefined,
-    device: typeof payload?.device === 'string' ? payload.device.trim() : undefined,
-    value: typeof payload?.value === 'string' ? payload.value.trim() : undefined,
-    door: typeof payload?.door === 'string' ? payload.door.trim() : undefined,
+    say: `Assistant unavailable: ${lastError || 'All models failed'}`,
+    action: 'none',
   };
 }
