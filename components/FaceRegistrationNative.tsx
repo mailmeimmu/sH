@@ -7,7 +7,7 @@ import {
   useFrameProcessor,
 } from 'react-native-vision-camera';
 import { runOnJS, useSharedValue } from 'react-native-reanimated';
-import { scanFaces } from 'vision-camera-face-detector';
+import { scanFaces } from '../utils/face-detection';
 import { Camera as CameraIcon, Save, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { buildTemplateFromFace, normalizeVisionFace, hashTemplateFromString } from '../utils/face-template';
 
