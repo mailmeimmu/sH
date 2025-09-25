@@ -1,13 +1,19 @@
 import { useEffect, useMemo } from 'react';
-import { Stack, router, useRootNavigationState, useSegments } from 'expo-router';
+import { useState } from 'react';
+import { Stack, router, useRootNavigationState, useSegments, SplashScreen } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { db } from '../services/database';
+import { Platform } from 'react-native';
+
+// Prevent splash screen from auto-hiding
+SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   useFrameworkReady();
   const rootNavigation = useRootNavigationState();
   const segments = useSegments();
+  const [isReady, setIsReady] = useState(false);
 
   const publicRoutes = useMemo(() => new Set([
     '/login',
@@ -21,6 +27,28 @@ export default function RootLayout() {
   ]), []);
 
   useEffect(() => {
+    console.log('[NafisaSmartHome] RootLayout mounted, platform:', Platform.OS);
+    
+    // Initialize database and wait for it to be ready
+    const initApp = async () => {
+      try {
+        if (db.readyPromise) {
+          await db.readyPromise;
+        }
+        setIsReady(true);
+        await SplashScreen.hideAsync();
+      } catch (error) {
+        console.log('[NafisaSmartHome] Init error:', error);
+        setIsReady(true);
+        await SplashScreen.hideAsync();
+      }
+    };
+    
+    initApp();
+  }, []);
+
+  useEffect(() => {
+    if (!isReady) return;
     if (!rootNavigation?.key) return;
     const routes = rootNavigation?.routes || [];
     if (routes.length === 0) return;
@@ -33,18 +61,21 @@ export default function RootLayout() {
 
     if (!authed) {
       if (!publicRoutes.has(normalized) && normalized !== '/login') {
-        setTimeout(() => router.replace('/login'), 0);
+        console.log('[NafisaSmartHome] Redirecting to login from:', normalized);
+        setTimeout(() => {
+          try {
+            router.replace('/login');
+          } catch (e) {
+            console.log('[NafisaSmartHome] Navigation error:', e);
+          }
+        }, 100);
       }
     }
-  }, [segments, publicRoutes, rootNavigation?.key, rootNavigation?.routes]);
-
-  useEffect(() => {
-    console.log('[NafisaSmartHome] RootLayout mounted');
-  }, []);
+  }, [segments, publicRoutes, rootNavigation?.key, rootNavigation?.routes, isReady]);
 
   return (
     <>
-      <Stack screenOptions={{ headerShown: false }} initialRouteName="login">
+      <Stack screenOptions={{ headerShown: false }} initialRouteName="splash">
         <Stack.Screen name="splash" />
         <Stack.Screen name="login" />
         <Stack.Screen name="(tabs)" />

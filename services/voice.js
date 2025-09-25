@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Speech from 'expo-speech';
+import { Alert } from 'react-native';
 
 let ExpoSpeechRecognitionModule;
 let addSpeechRecognitionListener;
@@ -18,17 +19,23 @@ class VoiceService {
     this.isListening = false;
     this.synthesis = null;
     this.recognition = null; // web
-    this.sttAvailable = false;
+    this.sttAvailable = Platform.OS === 'web';
     this.isExpoGo = (Constants?.appOwnership === 'expo');
     this.expoRecognition = null;
     this.expoSubscriptions = [];
     this.handleExpoResult = this.handleExpoResult.bind(this);
     this.handleExpoError = this.handleExpoError.bind(this);
     this.handleExpoSpeechEnd = this.handleExpoSpeechEnd.bind(this);
-    this.initializeServices();
+    
+    // Initialize after a brief delay to avoid initialization errors
+    setTimeout(() => {
+      this.initializeServices();
+    }, 100);
   }
 
   initializeServices() {
+    console.log('[Voice] Initializing services for platform:', Platform.OS);
+    
     if (Platform.OS === 'web') {
       if ('speechSynthesis' in window) this.synthesis = window.speechSynthesis;
       if ('webkitSpeechRecognition' in window) {
@@ -40,10 +47,15 @@ class VoiceService {
       }
     }
 
-    if (ExpoSpeechRecognitionModule && typeof addSpeechRecognitionListener === 'function') {
+    // For native platforms, try to set up Expo speech recognition
+    if (Platform.OS !== 'web' && ExpoSpeechRecognitionModule && typeof addSpeechRecognitionListener === 'function') {
       this.setupExpoSpeechRecognition().catch((error) => {
         console.warn('[voice] expo speech recognition unavailable', error?.message || error);
       });
+    } else if (Platform.OS !== 'web') {
+      console.log('[voice] Speech recognition not available in current environment');
+      // For Android, we can still enable basic functionality
+      this.sttAvailable = false;
     }
   }
 
@@ -65,7 +77,7 @@ class VoiceService {
   }
 
   async setupExpoSpeechRecognition() {
-    if (this.expoRecognition || !ExpoSpeechRecognitionModule?.requestPermissionsAsync) {
+    if (this.expoRecognition || !ExpoSpeechRecognitionModule?.requestPermissionsAsync || Platform.OS === 'web') {
       return;
     }
     if (typeof addSpeechRecognitionListener !== 'function') {
@@ -74,11 +86,14 @@ class VoiceService {
     try {
       const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!permission?.granted) {
+        console.log('[voice] Microphone permission not granted');
         return;
       }
       this.expoRecognition = ExpoSpeechRecognitionModule;
       this.sttAvailable = true;
+      console.log('[voice] Expo speech recognition initialized successfully');
     } catch (error) {
+      console.log('[voice] Failed to setup expo speech recognition:', error);
       throw error;
     }
   }
@@ -117,6 +132,11 @@ class VoiceService {
 
   async startListening() {
     return new Promise((resolve, reject) => {
+      if (Platform.OS !== 'web' && !this.sttAvailable && !this.expoRecognition) {
+        reject(new Error('Speech recognition not available. Please use the text input instead.'));
+        return;
+      }
+      
       this.resolvePromise = resolve;
       this.rejectPromise = reject;
       this.isListening = true;
@@ -151,13 +171,13 @@ class VoiceService {
               });
             }
           } catch (error) {
-            console.warn('[voice] expo speech start failed', error?.message || error);
+            console.log('[voice] expo speech start failed', error?.message || error);
             this.isListening = false;
             reject(error);
           }
         } else {
           this.isListening = false;
-          reject(new Error('Speech recognition not available in Expo Go. Use dev client or web.'));
+          reject(new Error('Speech recognition not available. Please use text input instead.'));
         }
       } catch (e) {
         this.isListening = false;
@@ -177,12 +197,36 @@ class VoiceService {
     }
   }
 
+  async requestPermissions() {
+    if (Platform.OS === 'web') return { granted: true };
+    
+    try {
+      if (this.expoRecognition && this.expoRecognition.requestPermissionsAsync) {
+        return await this.expoRecognition.requestPermissionsAsync();
+      }
+      return { granted: false };
+    } catch (error) {
+      console.log('[voice] Permission request failed:', error);
+      return { granted: false };
+    }
+  }
+
   async speak(text) {
+    if (!text || typeof text !== 'string') return;
+    
     if (Platform.OS !== 'web' && Speech && Speech.speak) {
       return new Promise(resolve => {
         try {
-          Speech.speak(text, { onDone: resolve, onStopped: resolve, language: 'en-US', rate: 0.95 });
+          Speech.speak(text, { 
+            onDone: resolve, 
+            onStopped: resolve, 
+            onError: resolve,
+            language: 'en-US', 
+            rate: 0.95,
+            volume: 0.8
+          });
         } catch (e) {
+          console.log('[voice] Speech error:', e);
           resolve();
         }
       });
@@ -193,7 +237,8 @@ class VoiceService {
       utterance.volume = 0.8;
       
       return new Promise((resolve) => {
-        utterance.onend = () => resolve();
+        utterance.onend = resolve;
+        utterance.onerror = resolve;
         this.synthesis.speak(utterance);
       });
     } else {
@@ -207,7 +252,7 @@ class VoiceService {
   }
 
   async speakWelcomeMessage() {
-    const welcomeMessage = 'Welcome to your smart home. You can control devices with your voice. For example, say \'Turn on the lights in the kitchen\'. Visit the voice tab for a full conversational experience.';
+    const welcomeMessage = 'Welcome to Smart Home by Nafisa Tabasum. You can control devices with your voice or use the text interface.';
     this.speak(welcomeMessage);
   }
 
@@ -232,7 +277,7 @@ class VoiceService {
   }
 
   isAvailable() {
-    return !!this.sttAvailable;
+    return Platform.OS === 'web' ? !!this.sttAvailable : (!!this.sttAvailable || !!this.expoRecognition);
   }
 }
 

@@ -8,8 +8,20 @@ export default function SplashScreen() {
     console.log('[NafisaSmartHome] Splash mounted');
     const timer = setTimeout(() => {
       console.log('[NafisaSmartHome] Splash navigating to /login');
-      router.replace('/login');
-    }, 2000);
+      try {
+        router.replace('/login');
+      } catch (e) {
+        console.log('[NafisaSmartHome] Navigation error from splash:', e);
+        // Fallback navigation
+        setTimeout(() => {
+          try {
+            router.push('/login');
+          } catch (e2) {
+            console.log('[NafisaSmartHome] Fallback navigation also failed:', e2);
+          }
+        }, 500);
+      }
+    }, 1500);
 
     return () => clearTimeout(timer);
   }, []);

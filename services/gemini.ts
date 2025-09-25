@@ -21,7 +21,7 @@ export type GeminiAssistantReply = {
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
-const RAW_API_BASE = 'http://156.67.104.77:8080/api';
+const RAW_API_BASE = process.env.EXPO_PUBLIC_API_BASE || '';
 
 function buildAssistantUrl() {
   if (!RAW_API_BASE) return null;
@@ -34,7 +34,9 @@ function buildAssistantUrl() {
 const ASSISTANT_URL = buildAssistantUrl();
 
 function getApiKey() {
-  return 'AIzaSyAcLNrhvMSahZk7BKr-rL2cMZAUm545_X4';
+  const envKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+  const hardcodedKey = 'AIzaSyAcLNrhvMSahZk7BKr-rL2cMZAUm545_X4';
+  return envKey || hardcodedKey;
 }
 
 function buildPrompt(userText: string) {
@@ -219,8 +221,11 @@ function extractAssistantCommand(partText: string): { payload: Record<string, an
 }
 
 export async function askGemini(userText: string, history: ChatMessage[] = []): Promise<GeminiAssistantReply> {
+  console.log('[Gemini] Processing request:', userText);
+  
   if (ASSISTANT_URL) {
     try {
+      console.log('[Gemini] Trying backend at:', ASSISTANT_URL);
       const res = await fetch(ASSISTANT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -228,6 +233,7 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        console.log('[Gemini] Backend response received');
         return {
           action: (data?.action as GeminiAction) || 'none',
           say: typeof data?.say === 'string' && data.say.trim() ? data.say.trim() : 'Okay.',
@@ -245,8 +251,10 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
     }
   }
 
+  console.log('[Gemini] Using direct API call');
   const apiKey = getApiKey();
   if (!apiKey) {
+    console.log('[Gemini] No API key available');
     return { say: 'Assistant service unavailable (no API key).', action: 'none' };
   }
 
@@ -258,9 +266,15 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
 
   const body = {
     contents,
-    generationConfig: { temperature: 0.6, topP: 0.9, maxOutputTokens: 256 },
+    generationConfig: { 
+      temperature: 0.7, 
+      topP: 0.9, 
+      maxOutputTokens: 512,
+      candidateCount: 1
+    },
   };
 
+  console.log('[Gemini] Making API request to Google');
   const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -268,6 +282,7 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   });
 
   if (!res.ok) {
+    console.log('[Gemini] API error:', res.status);
     const rawText = await res.text().catch(() => '');
     let message = rawText || res.statusText;
     if (rawText) {
@@ -285,10 +300,15 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   }
 
   const data = await res.json();
+  console.log('[Gemini] API response received');
   const candidate = data?.candidates?.[0];
   const partText = candidate?.content?.parts?.[0]?.text as string | undefined;
-  if (!partText) return { say: 'No response from Gemini', action: 'none' };
+  if (!partText) {
+    console.log('[Gemini] No text in response');
+    return { say: 'Sorry, I could not process that request.', action: 'none' };
+  }
 
+  console.log('[Gemini] Processing response text');
   const { payload, remainder } = extractAssistantCommand(partText);
 
   const primarySay = remainder.trim();
@@ -297,6 +317,8 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   const fallbackSay = /^COMMAND:/i.test(rawFallback) ? '' : rawFallback;
   const sayText = primarySay || secondarySay || fallbackSay || 'Okay.';
 
+  console.log('[Gemini] Final response - action:', action, 'say:', sayText);
+  
   const action = typeof payload?.action === 'string' ? (payload.action as string).trim() : 'none';
 
   return {

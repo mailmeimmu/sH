@@ -182,10 +182,19 @@ export default function HomeControlScreen() {
   useEffect(() => {
     let stopped = false;
     const boot = async () => {
-      setVaSpeaking(true);
-      await voiceService.speak('Welcome to Smart Home. Try saying: turn on main hall light.');
-      setVaSpeaking(false);
-      if (!stopped && voiceService.isAvailable()) startAssistant();
+      try {
+        setVaSpeaking(true);
+        await voiceService.speak('Welcome to Smart Home. Try saying: turn on main hall light.');
+        setVaSpeaking(false);
+        
+        // Only start continuous listening on web
+        if (!stopped && voiceService.isAvailable() && Platform.OS === 'web') {
+          startAssistant();
+        }
+      } catch (error) {
+        console.log('[Home] Voice init error:', error);
+        setVaSpeaking(false);
+      }
     };
     boot();
     return () => { stopped = true; };
@@ -193,7 +202,7 @@ export default function HomeControlScreen() {
   }, []);
 
   const startAssistant = async () => {
-    if (vaSpeaking || !voiceService.isAvailable()) return;
+    if (vaSpeaking || !voiceService.isAvailable() || Platform.OS !== 'web') return;
     setVaListening(true);
     try {
       const result = await voiceService.startListening();
@@ -202,8 +211,11 @@ export default function HomeControlScreen() {
       if (text) await handleAssistantText(text);
     } catch (e) {
       setVaListening(false);
+      console.log('[Home] Assistant listening error:', e);
     } finally {
-      setTimeout(() => startAssistant(), 300);
+      if (Platform.OS === 'web') {
+        setTimeout(() => startAssistant(), 300);
+      }
     }
   };
 
@@ -399,7 +411,24 @@ export default function HomeControlScreen() {
       Alert.alert('Permission', 'You are not allowed to use voice control.');
       return;
     }
-    Alert.alert('Voice Control', 'Voice assistant will keep listening for commands.');
+    
+    if (Platform.OS === 'web') {
+      Alert.alert('Voice Control', 'Voice assistant is active. Click the microphone icon to speak.');
+    } else {
+      Alert.alert(
+        'Voice Control', 
+        'Voice control is available. Use the Voice Control tab for full conversation mode, or try speaking a command.',
+        [
+          { text: 'OK' },
+          { 
+            text: 'Try Voice Command', 
+            onPress: () => {
+              router.push('/(tabs)/voice');
+            }
+          }
+        ]
+      );
+    }
   };
 
   const performSignOut = () => {

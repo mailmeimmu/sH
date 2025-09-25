@@ -112,15 +112,24 @@ export default function VoiceControlScreen() {
 
   useEffect(() => {
     // Initialize and destroy the voice service
-    voiceService.initializeServices();
+    const initVoice = async () => {
+      try {
+        await voiceService.requestPermissions();
+        console.log('[Voice] Voice service initialized');
+      } catch (error) {
+        console.log('[Voice] Voice service init error:', error);
+      }
+    };
+    
+    initVoice();
     return () => {
       voiceService.destroy();
     };
   }, []);
 
   useEffect(() => {
-    // Auto-start assistant loop if allowed
-    if (db.can('voice.use') && autoMode && !isListening && !isSpeaking) {
+    // Auto-start assistant loop if allowed and on web
+    if (db.can('voice.use') && autoMode && !isListening && !isSpeaking && Platform.OS === 'web') {
       const t = setTimeout(() => startListening(), 500);
       return () => clearTimeout(t);
     }
@@ -143,27 +152,36 @@ export default function VoiceControlScreen() {
       Alert.alert('Permission', 'You are not allowed to use voice control.');
       return;
     }
-    if (!voiceService.isAvailable()) {
-      Alert.alert('Voice unavailable', 'Speech recognition is not available in Expo Go. Use the dev client or web, or try quick commands.');
+    
+    if (!voiceService.isAvailable() && Platform.OS !== 'web') {
+      Alert.alert(
+        'Voice Recognition Unavailable', 
+        'Speech recognition is not available in this environment. Please use the text input below to type your commands.',
+        [{ text: 'OK' }]
+      );
       return;
     }
+    
     setTranscript('');
     setIsListening(true);
     
     // Use actual voice service
     voiceService.startListening()
       .then((result) => {
+        console.log('[Voice] Recognition result:', result);
         setTranscript(result.transcript);
         setIsListening(false);
         handleVoiceCommand(result.transcript);
       })
       .catch((error) => {
         setIsListening(false);
-        console.log('Voice recognition error:', error);
+        console.log('[Voice] Recognition error:', error);
         if (error.message.includes('permission')) {
           Alert.alert('Microphone Permission', 'Please grant microphone permission to use voice control.');
+        } else if (error.message.includes('not available')) {
+          addAssistantMessage('Voice recognition is not available. You can type your message below instead.');
         } else {
-          addAssistantMessage('Sorry, I couldn\'t hear that clearly. Please try again.');
+          addAssistantMessage('Sorry, I couldn\'t hear that clearly. You can type your message or try the voice button again.');
         }
       });
   };
@@ -407,6 +425,7 @@ export default function VoiceControlScreen() {
   };
 
   const handleVoiceCommand = async (text: string) => {
+    console.log('[Voice] Processing command:', text);
     addUserMessage(text);
     try {
       const chatHistory: ChatMessage[] = [...conversationHistory, { type: 'user' as const, message: text }].map((entry) => ({
@@ -414,12 +433,14 @@ export default function VoiceControlScreen() {
         content: entry.message,
       }));
       const reply = await askGemini(text, chatHistory);
+      console.log('[Voice] Gemini reply:', reply);
       const message = await executeAssistantReply(reply);
       addAssistantMessage(message);
       updateSuggestions(text, reply);
       await speakResponse(message);
     } catch (e) {
       const fallback = 'Sorry, I could not contact the assistant service.';
+      console.log('[Voice] Error processing command:', e);
       addAssistantMessage(fallback);
       await speakResponse(fallback);
     }
