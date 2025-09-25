@@ -35,6 +35,10 @@ export default function RootLayout() {
         if (db.readyPromise) {
           await db.readyPromise;
         }
+        // Initialize admin session after database is ready
+        if (db.initializeAdminSession) {
+          await db.initializeAdminSession();
+        }
         setIsReady(true);
         await SplashScreen.hideAsync();
       } catch (error) {

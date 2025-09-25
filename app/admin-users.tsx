@@ -30,10 +30,24 @@ export default function AdminUsersScreen() {
   const loadUsers = async () => {
     setLoading(true);
     try {
-      const list = await remoteApi.adminListUsers();
-      setUsers(list);
+      let userList = [];
+      
+      if (remoteApi.enabled) {
+        try {
+          userList = await remoteApi.adminListUsers();
+        } catch (error) {
+          console.log('[AdminUsers] Remote users failed, using local fallback');
+          userList = db.getAllUsers();
+        }
+      } else {
+        userList = db.getAllUsers();
+      }
+      
+      setUsers(userList);
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Unable to load users.');
+      console.log('[AdminUsers] Load users error:', e);
+      // Fallback to local users
+      setUsers(db.getAllUsers());
     } finally {
       setLoading(false);
     }
@@ -57,7 +71,25 @@ export default function AdminUsersScreen() {
   const applyRoleChange = async (user: any, role: 'admin' | 'parent' | 'member') => {
     if (user.role === role) return;
     try {
-      await remoteApi.adminUpdateUser(user.id, { role });
+      let success = false;
+      
+      if (remoteApi.enabled) {
+        try {
+          await remoteApi.adminUpdateUser(user.id, { role });
+          success = true;
+        } catch (error) {
+          console.log('[AdminUsers] Remote update failed, trying local');
+        }
+      }
+      
+      if (!success) {
+        const result = await db.adminUpdateUser(user.id, { role });
+        if (!result.success) {
+          Alert.alert('Update Failed', result.error || 'Could not update role.');
+          return;
+        }
+      }
+      
       Alert.alert('Updated', `${user.name} is now ${role}.`);
       loadUsers();
     } catch (e: any) {
@@ -80,7 +112,25 @@ export default function AdminUsersScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await remoteApi.adminDeleteUser(user.id);
+              let success = false;
+              
+              if (remoteApi.enabled) {
+                try {
+                  await remoteApi.adminDeleteUser(user.id);
+                  success = true;
+                } catch (error) {
+                  console.log('[AdminUsers] Remote delete failed, trying local');
+                }
+              }
+              
+              if (!success) {
+                const result = await db.adminDeleteUser(user.id);
+                if (!result.success) {
+                  Alert.alert('Delete Failed', result.error || 'Could not remove user.');
+                  return;
+                }
+              }
+              
               loadUsers();
             } catch (e: any) {
               Alert.alert('Delete Failed', e?.message || 'Could not remove user.');
@@ -96,13 +146,34 @@ export default function AdminUsersScreen() {
     if (!newPin.trim()) { Alert.alert('Validation', 'PIN is required.'); return; }
     try {
       setLoading(true);
-      await remoteApi.adminCreateUser({
+      
+      const userData = {
         name: newName.trim(),
         email: newEmail.trim() || undefined,
         pin: newPin.trim(),
         role: newRole,
         relation: newRole === 'parent' ? 'owner' : '',
-      });
+      };
+      
+      let success = false;
+      
+      if (remoteApi.enabled) {
+        try {
+          await remoteApi.adminCreateUser(userData);
+          success = true;
+        } catch (error) {
+          console.log('[AdminUsers] Remote create failed, trying local');
+        }
+      }
+      
+      if (!success) {
+        const result = await db.adminCreateUser(userData);
+        if (!result.success) {
+          Alert.alert('Create Failed', result.error || 'Could not create user.');
+          return;
+        }
+      }
+      
       setNewName('');
       setNewEmail('');
       setNewPin('');

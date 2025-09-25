@@ -225,13 +225,18 @@ export const remoteApi = {
     return mapped;
   },
   async adminLogin(email: string, pin: string) {
-    const { ok, data } = await post('/api/admin/login', { email, pin });
-    if (!ok) throw new Error(data?.error || 'admin login failed');
-    adminToken = data?.token || null;
-    if (data?.success && data?.user) {
-      return { success: true, user: data.user, token: adminToken };
+    try {
+      const { ok, data } = await post('/api/admin/login', { email, pin });
+      if (!ok) throw new Error(data?.error || 'admin login failed');
+      adminToken = data?.token || null;
+      if (data?.success && data?.user) {
+        return { success: true, user: data.user, token: adminToken };
+      }
+      throw new Error(data?.error || 'admin login failed');
+    } catch (error) {
+      console.log('[RemoteAPI] Admin login failed:', error);
+      throw error;
     }
-    throw new Error(data?.error || 'admin login failed');
   },
   adminLogout() {
     adminToken = null;
@@ -243,42 +248,62 @@ export const remoteApi = {
     return adminToken;
   },
   async adminListUsers() {
-    if (!normalizedBase) throw new Error('API base not configured');
-    const headers: Record<string, string> = {};
-    if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
-    const res = await fetch(buildUrl('/api/admin/users'), { headers });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || 'admin users failed');
-    return data?.users || [];
+    try {
+      if (!normalizedBase) throw new Error('API base not configured');
+      const headers: Record<string, string> = {};
+      if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+      const res = await fetch(buildUrl('/api/admin/users'), { headers });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'admin users failed');
+      return data?.users || [];
+    } catch (error) {
+      console.log('[RemoteAPI] Admin list users failed:', error);
+      throw error;
+    }
   },
   async adminCreateUser(payload: any) {
-    const headers: Record<string, string> = {};
-    if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
-    const { ok, data } = await post('/api/admin/users', payload, headers);
-    if (!ok) throw new Error(data?.error || 'admin create user failed');
-    return data;
+    try {
+      const headers: Record<string, string> = {};
+      if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+      const { ok, data } = await post('/api/admin/users', payload, headers);
+      if (!ok) throw new Error(data?.error || 'admin create user failed');
+      return data;
+    } catch (error) {
+      console.log('[RemoteAPI] Admin create user failed:', error);
+      throw error;
+    }
   },
   async adminUpdateUser(id: string | number, updates: any) {
-    if (!normalizedBase) throw new Error('API base not configured');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
-    const res = await fetch(buildUrl(`/api/admin/users/${id}`), {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify(updates),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || 'admin update user failed');
-    return data;
+    try {
+      if (!normalizedBase) throw new Error('API base not configured');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+      const res = await fetch(buildUrl(`/api/admin/users/${id}`), {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'admin update user failed');
+      return data;
+    } catch (error) {
+      console.log('[RemoteAPI] Admin update user failed:', error);
+      throw error;
+    }
   },
   async adminDeleteUser(id: string | number) {
-    if (!normalizedBase) throw new Error('API base not configured');
-    const headers: Record<string, string> = {};
-    if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
-    const res = await fetch(buildUrl(`/api/admin/users/${id}`), { method: 'DELETE', headers });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || 'admin delete user failed');
-    return data;
+    try {
+      if (!normalizedBase) throw new Error('API base not configured');
+      const headers: Record<string, string> = {};
+      if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+      const res = await fetch(buildUrl(`/api/admin/users/${id}`), { method: 'DELETE', headers });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'admin delete user failed');
+      return data;
+    } catch (error) {
+      console.log('[RemoteAPI] Admin delete user failed:', error);
+      throw error;
+    }
   },
 };
 

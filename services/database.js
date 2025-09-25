@@ -465,6 +465,104 @@ class DatabaseService {
 
   clearAdminSession() {
     this.adminSession = null;
+    if (Platform.OS === 'web') {
+      webStorage.removeItem('admin_session');
+    }
+  }
+
+  async initializeAdminSession() {
+    if (Platform.OS === 'web') {
+      const sessionData = webStorage.getItem('admin_session');
+      if (sessionData) {
+        try {
+          this.adminSession = JSON.parse(sessionData);
+        } catch {}
+      }
+    }
+  }
+
+  setAdminSession(session) {
+    this.adminSession = session;
+    if (Platform.OS === 'web') {
+      webStorage.setItem('admin_session', JSON.stringify(session));
+    }
+  }
+
+  // Admin user management for local fallback
+  async adminCreateUser(userData) {
+    const userId = Date.now().toString();
+    const user = {
+      id: userId,
+      name: userData.name,
+      email: userData.email || '',
+      role: userData.role || 'member',
+      relation: userData.relation || '',
+      pin: userData.pin,
+      preferredLogin: 'pin',
+      policies: this.defaultPolicies(userData.role || 'member'),
+      registeredAt: new Date().toISOString()
+    };
+
+    this.users.set(userId, user);
+    this.members.set(userId, user);
+    this.persistMembersToWeb();
+    
+    try {
+      await this.readyPromise;
+      if (this.db) {
+        await exec(this.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+          user.id, user.name, user.email, user.role, user.relation, user.pin, user.preferredLogin, JSON.stringify(user.policies), '', '', user.registeredAt
+        ]);
+      }
+    } catch {}
+    
+    return { success: true, user };
+  }
+
+  async adminUpdateUser(id, updates) {
+    const user = this.users.get(id);
+    if (!user) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const updatedUser = { ...user, ...updates };
+    if (updates.policies) {
+      updatedUser.policies = this.ensurePolicyShape(updatedUser.role, updates.policies);
+    }
+
+    this.users.set(id, updatedUser);
+    this.members.set(id, updatedUser);
+    this.persistMembersToWeb();
+
+    try {
+      await this.readyPromise;
+      if (this.db) {
+        await exec(this.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+          updatedUser.id, updatedUser.name, updatedUser.email, updatedUser.role, updatedUser.relation, updatedUser.pin || '', updatedUser.preferredLogin || 'pin', JSON.stringify(updatedUser.policies), updatedUser.faceId || '', updatedUser.faceTemplate || '', updatedUser.registeredAt || new Date().toISOString()
+        ]);
+      }
+    } catch {}
+
+    return { success: true, user: updatedUser };
+  }
+
+  async adminDeleteUser(id) {
+    if (!this.users.has(id)) {
+      return { success: false, error: 'User not found' };
+    }
+
+    this.users.delete(id);
+    this.members.delete(id);
+    this.persistMembersToWeb();
+
+    try {
+      await this.readyPromise;
+      if (this.db) {
+        await exec(this.db, 'DELETE FROM members WHERE id=?', [id]);
+      }
+    } catch {}
+
+    return { success: true };
   }
 
   // --- Family management ---
