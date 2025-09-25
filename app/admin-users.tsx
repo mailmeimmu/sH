@@ -19,30 +19,38 @@ export default function AdminUsersScreen() {
   const [newRole, setNewRole] = useState<'admin' | 'parent' | 'member'>('parent');
 
   useEffect(() => {
+    console.log('[AdminUsers] Component mounted');
     if (!session || !session.token) {
+      console.log('[AdminUsers] No valid session, redirecting to login');
       router.replace('/admin-login');
       return;
     }
+    console.log('[AdminUsers] Valid session found:', session.name);
     remoteApi.setAdminToken(session.token);
     loadUsers();
   }, [session]);
 
   const loadUsers = async () => {
+    console.log('[AdminUsers] Loading users...');
     setLoading(true);
     try {
       let userList = [];
       
       if (remoteApi.enabled) {
         try {
+          console.log('[AdminUsers] Trying remote user list');
           userList = await remoteApi.adminListUsers();
+          console.log('[AdminUsers] Remote users loaded:', userList.length);
         } catch (error) {
           console.log('[AdminUsers] Remote users failed, using local fallback');
           userList = db.getAllUsers();
         }
       } else {
+        console.log('[AdminUsers] Remote API disabled, using local users');
         userList = db.getAllUsers();
       }
       
+      console.log('[AdminUsers] Final user list:', userList.length, userList.map(u => ({ name: u.name, role: u.role })));
       setUsers(userList);
     } catch (e: any) {
       console.log('[AdminUsers] Load users error:', e);

@@ -32,15 +32,19 @@ export default function RootLayout() {
     // Initialize database and wait for it to be ready
     const initApp = async () => {
       try {
+        console.log('[RootLayout] Initializing app...');
         if (db.readyPromise) {
           await db.readyPromise;
+          console.log('[RootLayout] Database ready');
         }
         // Initialize admin session after database is ready
         if (db.initializeAdminSession) {
           await db.initializeAdminSession();
+          console.log('[RootLayout] Admin session initialized');
         }
         setIsReady(true);
         await SplashScreen.hideAsync();
+        console.log('[RootLayout] App initialization complete');
       } catch (error) {
         console.log('[NafisaSmartHome] Init error:', error);
         setIsReady(true);

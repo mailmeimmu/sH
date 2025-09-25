@@ -13,10 +13,12 @@ export default function AdminLoginScreen() {
   const [loading, setLoading] = useState(false);
 
   React.useEffect(() => {
-    // Initialize admin session
-    db.initializeAdminSession?.();
+    console.log('[AdminLogin] Component mounted');
+    // Check for existing session
     const session = db.getAdminSession();
+    console.log('[AdminLogin] Existing session:', session?.name || 'none');
     if (session?.token) {
+      console.log('[AdminLogin] Valid session found, redirecting to admin panel');
       remoteApi.setAdminToken(session.token);
       router.replace('/admin-users');
     }
@@ -32,8 +34,13 @@ export default function AdminLoginScreen() {
     setLoading(true);
     
     try {
-      let loginResult = null;
+      console.log('[AdminLogin] Starting authentication process');
       
+      // Try local authentication first
+      const localResult = await db.authenticateAdmin(email.trim(), pin.trim());
+      console.log('[AdminLogin] Local auth result:', localResult);
+      
+      let loginResult = null;
       if (remoteApi.enabled) {
         try {
           console.log('[AdminLogin] Trying remote admin login');
@@ -41,67 +48,17 @@ export default function AdminLoginScreen() {
           console.log('[AdminLogin] Remote login result:', loginResult);
         } catch (error) {
           console.log('[AdminLogin] Remote login failed, trying local fallback:', (error as any)?.message || error);
+          loginResult = localResult;
         }
-      }
-      
-      // Local fallback for admin login
-      if (!loginResult) {
-        console.log('[AdminLogin] Using local admin authentication');
-        
-        // Ensure database is ready
-        await db.readyPromise;
-        
-        const allUsers = db.getAllUsers();
-        console.log('[AdminLogin] All users:', allUsers.length, allUsers.map(u => ({ id: u.id, name: u.name, role: u.role })));
-        
-        let adminUser = allUsers.find(u => u.role === 'admin' && u.email === email.trim() && u.pin === pin.trim());
-        
-        if (adminUser) {
-          console.log('[AdminLogin] Found existing admin user:', adminUser.name);
-          loginResult = { success: true, user: adminUser, token: 'local-admin-token' };
-        } else {
-          // Create default admin if credentials match expected defaults
-          if (email.trim() === 'admin@example.com' && pin.trim() === '123456') {
-            console.log('[AdminLogin] Creating default admin user');
-            const newAdmin = {
-              id: 'admin-' + Date.now(),
-              name: 'Super Admin',
-              email: 'admin@example.com',
-              role: 'admin',
-              relation: 'owner',
-              pin: '123456',
-              preferredLogin: 'pin',
-              policies: db.defaultPolicies('admin'),
-              registeredAt: new Date().toISOString()
-            };
-            
-            // Add to database properly
-            db.users.set(newAdmin.id, newAdmin);
-            db.members.set(newAdmin.id, newAdmin);
-            db.persistMembersToWeb();
-            
-            // Persist to SQLite if available
-            try {
-              if (db.db) {
-                await exec(db.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
-                  newAdmin.id, newAdmin.name, newAdmin.email, newAdmin.role, newAdmin.relation, newAdmin.pin, newAdmin.preferredLogin, JSON.stringify(newAdmin.policies), '', '', newAdmin.registeredAt
-                ]);
-              }
-            } catch (e) {
-              console.warn('[AdminLogin] Failed to persist to SQLite:', e);
-            }
-            
-            console.log('[AdminLogin] Default admin created successfully');
-            loginResult = { success: true, user: newAdmin, token: 'local-admin-token' };
-          } else {
-            console.log('[AdminLogin] Invalid credentials provided');
-          }
-        }
+      } else {
+        console.log('[AdminLogin] Remote API disabled, using local result');
+        loginResult = localResult;
       }
       
       if (loginResult && loginResult.success && loginResult.user && loginResult.token) {
         console.log('[AdminLogin] Login successful, setting session');
-        db.setAdminSession({ ...loginResult.user, token: loginResult.token });
+        const sessionData = { ...loginResult.user, token: loginResult.token };
+        db.setAdminSession(sessionData);
         remoteApi.setAdminToken(loginResult.token);
         console.log('[AdminLogin] Navigating to admin users');
         router.replace('/admin-users');

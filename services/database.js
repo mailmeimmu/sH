@@ -99,9 +99,13 @@ class DatabaseService {
     
     // Family members
     this.members = new Map();
+    
     // Activity log for doors
     this.doorEvents = [];
     this.doorListeners = new Set();
+
+    // Admin session storage
+    this.adminSession = null;
 
     // SQLite persistence
     this.db = openDb();
@@ -264,6 +268,17 @@ class DatabaseService {
   async initializeWebStorage() {
     console.log('[DB] Initializing web storage');
     
+    // Load admin session
+    const adminSessionData = webStorage.getItem('smarthome_admin_session');
+    if (adminSessionData) {
+      try {
+        this.adminSession = JSON.parse(adminSessionData);
+        console.log('[DB] Loaded admin session:', this.adminSession?.name);
+      } catch (e) {
+        console.warn('[DB] Failed to parse admin session from web storage', e);
+      }
+    }
+
     // Load members from localStorage
     const membersData = webStorage.getItem('smarthome_members');
     if (membersData) {
@@ -298,20 +313,7 @@ class DatabaseService {
 
     // Create default admin user if no users exist
     if (this.members.size === 0) {
-      const adminUser = {
-        id: 'admin-default',
-        name: 'Admin User',
-        email: 'admin@example.com',
-        role: 'admin',
-        relation: 'owner',
-        pin: '123456',
-        preferredLogin: 'pin',
-        policies: this.defaultPolicies('admin'),
-        registeredAt: new Date().toISOString(),
-      };
-      this.members.set(adminUser.id, adminUser);
-      this.users.set(adminUser.id, adminUser);
-      this.persistMembersToWeb();
+      this.createDefaultAdminUser();
     }
   }
 
@@ -336,6 +338,51 @@ class DatabaseService {
     } catch (e) {
       console.warn('[DB] Failed to persist doors to web storage', e);
     }
+  }
+
+  createDefaultAdminUser() {
+    console.log('[DB] Creating default admin user');
+    const adminUser = {
+      id: 'admin-default',
+      name: 'Super Admin',
+      email: 'admin@example.com',
+      role: 'admin',
+      relation: 'owner',
+      pin: '123456',
+      preferredLogin: 'pin',
+      policies: this.defaultPolicies('admin'),
+      registeredAt: new Date().toISOString(),
+    };
+    this.members.set(adminUser.id, adminUser);
+    this.users.set(adminUser.id, adminUser);
+    this.persistMembersToWeb();
+    console.log('[DB] Default admin user created:', adminUser.name);
+    return adminUser;
+  }
+
+  // Admin authentication method
+  async authenticateAdmin(email, pin) {
+    console.log('[DB] Authenticating admin:', email);
+    await this.readyPromise;
+    
+    // Look for existing admin
+    let adminUser = Array.from(this.users.values()).find(u => 
+      u.role === 'admin' && u.email === email && u.pin === pin
+    );
+    
+    if (!adminUser) {
+      console.log('[DB] No existing admin found, checking for default credentials');
+      // Create default admin if using default credentials
+      if (email === 'admin@example.com' && pin === '123456') {
+        adminUser = this.createDefaultAdminUser();
+      } else {
+        console.log('[DB] Invalid admin credentials');
+        return { success: false, error: 'Invalid admin credentials' };
+      }
+    }
+    
+    console.log('[DB] Admin authentication successful:', adminUser.name);
+    return { success: true, user: adminUser };
   }
 
   // Register new user with face data
@@ -483,25 +530,34 @@ class DatabaseService {
 
   setAdminSession(session) {
     this.adminSession = session;
+    if (Platform.OS === 'web') {
+      webStorage.setItem('smarthome_admin_session', JSON.stringify(session));
+      console.log('[DB] Admin session saved to web storage');
+    }
   }
 
   getAdminSession() {
+    console.log('[DB] Getting admin session:', this.adminSession?.name || 'none');
     return this.adminSession;
   }
 
   clearAdminSession() {
+    console.log('[DB] Clearing admin session');
     this.adminSession = null;
     if (Platform.OS === 'web') {
       webStorage.removeItem('admin_session');
+      webStorage.removeItem('smarthome_admin_session');
     }
   }
 
   async initializeAdminSession() {
+    console.log('[DB] Initializing admin session');
     if (Platform.OS === 'web') {
-      const sessionData = webStorage.getItem('admin_session');
+      const sessionData = webStorage.getItem('smarthome_admin_session');
       if (sessionData) {
         try {
           this.adminSession = JSON.parse(sessionData);
+          console.log('[DB] Admin session restored:', this.adminSession?.name);
         } catch {}
       }
     }
