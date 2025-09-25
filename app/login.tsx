@@ -39,6 +39,18 @@ export default function LoginScreen() {
 
   React.useEffect(() => {
     console.log('[NafisaSmartHome] Login mounted');
+    // Initialize database first
+    const initDb = async () => {
+      try {
+        if (db.readyPromise) {
+          await db.readyPromise;
+        }
+      } catch (e) {
+        console.warn('[Login] Database init warning:', e);
+      }
+    };
+    initDb();
+    
     checkBiometricAvailability();
 
     // Intro animations

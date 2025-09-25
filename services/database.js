@@ -1,6 +1,7 @@
 // Database service for user management
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
 
 export const DOOR_LABELS = {
   mainhall: 'Main Hall',
@@ -13,6 +14,11 @@ export const DOOR_KEYS = Object.keys(DOOR_LABELS);
 
 function openDb() {
   try {
+    // SQLite is not available on web, return null
+    if (Platform.OS === 'web') {
+      console.log('[DB] SQLite not available on web, using memory storage');
+      return null;
+    }
     // Use classic WebSQL-style API for broad compatibility (Expo Go, Dev Client)
     const db = SQLite.openDatabase('fawzino.db');
     return db;
@@ -21,7 +27,35 @@ function openDb() {
   }
 }
 
+// Web storage helpers
+const webStorage = {
+  getItem: (key) => {
+    if (Platform.OS !== 'web') return null;
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (key, value) => {
+    if (Platform.OS !== 'web') return;
+    try {
+      localStorage.setItem(key, value);
+    } catch {}
+  },
+  removeItem: (key) => {
+    if (Platform.OS !== 'web') return;
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+  }
+};
+
 async function exec(db, sql, params = []) {
+  if (Platform.OS === 'web' || !db) {
+    // Web fallback - just resolve
+    return Promise.resolve(null);
+  }
   return new Promise((resolve, reject) => {
     try {
       if (db && db.transaction) {
@@ -36,6 +70,10 @@ async function exec(db, sql, params = []) {
 }
 
 async function queryAll(db, sql, params = []) {
+  if (Platform.OS === 'web' || !db) {
+    // Web fallback - return empty array
+    return [];
+  }
   const res = await exec(db, sql, params);
   if (!res) return [];
   if (Array.isArray(res)) {
@@ -65,7 +103,7 @@ class DatabaseService {
 
     // SQLite persistence
     this.db = openDb();
-    this.dbPath = (FileSystem?.documentDirectory ? `${FileSystem.documentDirectory}SQLite/fawzino.db` : 'SQLite/fawzino.db');
+    this.dbPath = Platform.OS === 'web' ? 'web-storage' : (FileSystem?.documentDirectory ? `${FileSystem.documentDirectory}SQLite/fawzino.db` : 'SQLite/fawzino.db');
     this.ready = false;
     this.readyPromise = this.initializeStorage()
       .then(() => { this.ready = true; console.log('[DB] Ready at', this.dbPath); })
@@ -104,6 +142,10 @@ class DatabaseService {
   }
 
   async initializeStorage() {
+    if (Platform.OS === 'web') {
+      await this.initializeWebStorage();
+      return;
+    }
     if (!this.db) return;
     // Create tables
     await exec(this.db, `CREATE TABLE IF NOT EXISTS members (
@@ -193,6 +235,83 @@ class DatabaseService {
     }
   }
 
+  async initializeWebStorage() {
+    console.log('[DB] Initializing web storage');
+    
+    // Load members from localStorage
+    const membersData = webStorage.getItem('smarthome_members');
+    if (membersData) {
+      try {
+        const parsed = JSON.parse(membersData);
+        for (const m of parsed) {
+          const normalizedPolicies = this.ensurePolicyShape(m.role, m.policies);
+          const member = { ...m, policies: normalizedPolicies };
+          this.members.set(m.id, member);
+          this.users.set(m.id, member);
+          if (m.faceTemplate) this.faceData.set(m.faceTemplate, m.id);
+        }
+      } catch (e) {
+        console.warn('[DB] Failed to parse members from web storage', e);
+      }
+    }
+
+    // Load door states
+    const doorData = webStorage.getItem('smarthome_doors');
+    if (doorData) {
+      try {
+        const parsed = JSON.parse(doorData);
+        for (const [door, locked] of Object.entries(parsed)) {
+          if (DOOR_KEYS.includes(door)) {
+            this.doorLocks.set(door, !!locked);
+          }
+        }
+      } catch (e) {
+        console.warn('[DB] Failed to parse doors from web storage', e);
+      }
+    }
+
+    // Create default admin user if no users exist
+    if (this.members.size === 0) {
+      const adminUser = {
+        id: 'admin-default',
+        name: 'Admin User',
+        email: 'admin@example.com',
+        role: 'admin',
+        relation: 'owner',
+        pin: '123456',
+        preferredLogin: 'pin',
+        policies: this.defaultPolicies('admin'),
+        registeredAt: new Date().toISOString(),
+      };
+      this.members.set(adminUser.id, adminUser);
+      this.users.set(adminUser.id, adminUser);
+      this.persistMembersToWeb();
+    }
+  }
+
+  persistMembersToWeb() {
+    if (Platform.OS !== 'web') return;
+    try {
+      const members = Array.from(this.members.values());
+      webStorage.setItem('smarthome_members', JSON.stringify(members));
+    } catch (e) {
+      console.warn('[DB] Failed to persist members to web storage', e);
+    }
+  }
+
+  persistDoorsToWeb() {
+    if (Platform.OS !== 'web') return;
+    try {
+      const doors = {};
+      for (const [k, v] of this.doorLocks.entries()) {
+        doors[k] = v;
+      }
+      webStorage.setItem('smarthome_doors', JSON.stringify(doors));
+    } catch (e) {
+      console.warn('[DB] Failed to persist doors to web storage', e);
+    }
+  }
+
   // Register new user with face data
   async registerUser(userData, faceTemplate) {
     const userId = Date.now().toString();
@@ -227,6 +346,7 @@ class DatabaseService {
     this.members.set(userId, user);
 
     // Persist
+    this.persistMembersToWeb();
     try {
       await this.readyPromise;
       if (this.db) {
@@ -373,6 +493,7 @@ class DatabaseService {
     this.members.set(id, member);
     this.users.set(id, member);
     // Persist
+    this.persistMembersToWeb();
     (async () => { try { await this.readyPromise; if (this.db) await exec(this.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [id, name, email, role, relation, pin, 'pin', JSON.stringify(member.policies), '', '', member.registeredAt]); } catch {} })();
     return { success: true, member };
   }
@@ -395,6 +516,7 @@ class DatabaseService {
     this.members.set(id, updated);
     this.users.set(id, updated);
     // Persist
+    this.persistMembersToWeb();
     (async () => { try { await this.readyPromise; if (this.db) await exec(this.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [updated.id, updated.name, updated.email, updated.role, updated.relation, updated.pin || '', updated.preferredLogin || 'pin', JSON.stringify(updated.policies || this.defaultPolicies(updated.role)), updated.faceId || '', updated.faceTemplate || '', updated.registeredAt || new Date().toISOString()]); } catch {} })();
     if (this.currentUser?.id === id) this.currentUser = updated;
     return { success: true, member: updated };
@@ -404,6 +526,7 @@ class DatabaseService {
     this.members.delete(id);
     this.users.delete(id);
     // Persist
+    this.persistMembersToWeb();
     (async () => { try { await this.readyPromise; if (this.db) await exec(this.db, 'DELETE FROM members WHERE id=?', [id]); } catch {} })();
     if (this.currentUser?.id === id) this.currentUser = null;
     return { success: true };
@@ -546,6 +669,7 @@ class DatabaseService {
     if (options.log) {
       this.logDoorEvent(value ? 'lock' : 'unlock', name, this.currentUser?.id, true, options.reason);
     }
+    this.persistDoorsToWeb();
     if (options.persist !== false) {
       (async () => {
         await this.persistDoorState(name, value);
@@ -576,6 +700,7 @@ class DatabaseService {
         }
       }
     });
+    this.persistDoorsToWeb();
     if (changed && options.emit !== false) {
       this.emitDoorChange();
     }
@@ -638,6 +763,7 @@ class DatabaseService {
     const updatedUser = { ...user, faceTemplate: newFaceTemplate };
     this.users.set(userId, updatedUser);
     this.faceData.set(newFaceTemplate, userId);
+    this.persistMembersToWeb();
     if (this.currentUser?.id === userId) {
       this.currentUser = updatedUser;
     }

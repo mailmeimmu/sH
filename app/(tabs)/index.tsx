@@ -180,24 +180,17 @@ export default function HomeControlScreen() {
   }, [loadDeviceStates]);
 
   useEffect(() => {
-    let stopped = false;
-    const boot = async () => {
+    // Initialize voice service quietly
+    const initVoice = async () => {
       try {
-        setVaSpeaking(true);
-        await voiceService.speak('Welcome to Smart Home. Try saying: turn on main hall light.');
-        setVaSpeaking(false);
-        
-        // Only start continuous listening on web
-        if (!stopped && voiceService.isAvailable() && Platform.OS === 'web') {
-          startAssistant();
+        if (db.can('voice.use')) {
+          await voiceService.requestPermissions();
         }
       } catch (error) {
         console.log('[Home] Voice init error:', error);
-        setVaSpeaking(false);
       }
     };
-    boot();
-    return () => { stopped = true; };
+    initVoice();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
