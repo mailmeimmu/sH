@@ -269,8 +269,10 @@ export default function HomeControlScreen() {
   };
 
   const handleAssistantText = async (text: string) => {
+    console.log('[Assistant] Processing text:', text);
     try {
       const reply = await askGemini(text);
+      console.log('[Assistant] Gemini reply:', reply);
       if (!reply) return;
       if (reply.action === 'device.set') {
         const zoneId = mapRoom(reply.room);
