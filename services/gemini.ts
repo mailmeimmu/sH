@@ -24,6 +24,7 @@ export type GeminiAssistantReply = {
 const GEMINI_MODELS = [
   'gemini-1.5-flash-latest',
   'gemini-1.5-flash'
+]
 
 const getGeminiEndpoint = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
