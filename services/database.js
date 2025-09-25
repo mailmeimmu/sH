@@ -491,13 +491,14 @@ class DatabaseService {
   // Admin user management for local fallback
   async adminCreateUser(userData) {
     const userId = Date.now().toString();
+    const pin = userData.pin || '123456';
     const user = {
       id: userId,
       name: userData.name,
       email: userData.email || '',
       role: userData.role || 'member',
       relation: userData.relation || '',
-      pin: userData.pin,
+      pin: pin,
       preferredLogin: 'pin',
       policies: this.defaultPolicies(userData.role || 'member'),
       registeredAt: new Date().toISOString()
@@ -511,10 +512,12 @@ class DatabaseService {
       await this.readyPromise;
       if (this.db) {
         await exec(this.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
-          user.id, user.name, user.email, user.role, user.relation, user.pin, user.preferredLogin, JSON.stringify(user.policies), '', '', user.registeredAt
+          user.id, user.name, user.email, user.role, user.relation, pin, user.preferredLogin, JSON.stringify(user.policies), '', '', user.registeredAt
         ]);
       }
-    } catch {}
+    } catch (e) {
+      console.warn('[DB] Failed to persist admin created user to SQLite', e);
+    }
     
     return { success: true, user };
   }

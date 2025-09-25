@@ -144,6 +144,8 @@ export default function AdminUsersScreen() {
   const handleCreate = async () => {
     if (!newName.trim()) { Alert.alert('Validation', 'Name is required.'); return; }
     if (!newPin.trim()) { Alert.alert('Validation', 'PIN is required.'); return; }
+    
+    console.log('[AdminUsers] Creating user:', newName.trim(), newRole);
     try {
       setLoading(true);
       
@@ -159,7 +161,9 @@ export default function AdminUsersScreen() {
       
       if (remoteApi.enabled) {
         try {
+          console.log('[AdminUsers] Trying remote user creation');
           await remoteApi.adminCreateUser(userData);
+          console.log('[AdminUsers] Remote user creation successful');
           success = true;
         } catch (error) {
           console.log('[AdminUsers] Remote create failed, trying local');
@@ -167,19 +171,24 @@ export default function AdminUsersScreen() {
       }
       
       if (!success) {
+        console.log('[AdminUsers] Using local user creation');
         const result = await db.adminCreateUser(userData);
+        console.log('[AdminUsers] Local creation result:', result);
         if (!result.success) {
           Alert.alert('Create Failed', result.error || 'Could not create user.');
           return;
         }
       }
       
+      console.log('[AdminUsers] User created successfully, resetting form');
       setNewName('');
       setNewEmail('');
       setNewPin('');
       setNewRole('parent');
+      Alert.alert('Success', 'User created successfully!');
       loadUsers();
     } catch (e: any) {
+      console.log('[AdminUsers] Create user error:', e);
       Alert.alert('Create Failed', e?.message || 'Could not create user.');
     } finally {
       setLoading(false);

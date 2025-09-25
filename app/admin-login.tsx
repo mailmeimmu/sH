@@ -27,29 +27,38 @@ export default function AdminLoginScreen() {
       Alert.alert('Validation', 'Please enter email and PIN.');
       return;
     }
+    
+    console.log('[AdminLogin] Attempting login with:', email.trim(), pin.trim());
     setLoading(true);
+    
     try {
       let loginResult = null;
       
       if (remoteApi.enabled) {
         try {
+          console.log('[AdminLogin] Trying remote admin login');
           loginResult = await remoteApi.adminLogin(email.trim(), pin.trim());
+          console.log('[AdminLogin] Remote login result:', loginResult);
         } catch (error) {
-          console.log('[AdminLogin] Remote login failed, trying local fallback');
+          console.log('[AdminLogin] Remote login failed, trying local fallback:', error);
         }
       }
       
       // Local fallback for admin login
       if (!loginResult) {
+        console.log('[AdminLogin] Using local admin authentication');
         // Check for default admin user
         const allUsers = db.getAllUsers();
+        console.log('[AdminLogin] All users:', allUsers.length);
         const adminUser = allUsers.find(u => u.role === 'admin' && u.email === email.trim() && u.pin === pin.trim());
         
         if (adminUser) {
+          console.log('[AdminLogin] Found existing admin user:', adminUser.name);
           loginResult = { user: adminUser, token: 'local-admin-token' };
         } else {
           // Create default admin if credentials match expected defaults
           if (email.trim() === 'admin@example.com' && pin.trim() === '123456') {
+            console.log('[AdminLogin] Creating default admin user');
             const defaultAdmin = {
               id: 'admin-' + Date.now(),
               name: 'Super Admin',
@@ -65,21 +74,26 @@ export default function AdminLoginScreen() {
             db.users.set(defaultAdmin.id, defaultAdmin);
             db.members.set(defaultAdmin.id, defaultAdmin);
             db.persistMembersToWeb();
+            console.log('[AdminLogin] Default admin created successfully');
             loginResult = { user: defaultAdmin, token: 'local-admin-token' };
+          } else {
+            console.log('[AdminLogin] Invalid credentials provided');
           }
         }
       }
       
       if (loginResult && loginResult.user && loginResult.token) {
+        console.log('[AdminLogin] Login successful, setting session');
         db.setAdminSession({ ...loginResult.user, token: loginResult.token });
         remoteApi.setAdminToken(loginResult.token);
-        Alert.alert('Welcome', `Logged in as ${loginResult.user.name}`, [
-          { text: 'Continue', onPress: () => router.replace('/admin-users') }
-        ]);
+        console.log('[AdminLogin] Navigating to admin users');
+        router.replace('/admin-users');
       } else {
+        console.log('[AdminLogin] Login failed - no valid result');
         Alert.alert('Login Failed', 'Invalid credentials.');
       }
     } catch (e: any) {
+      console.log('[AdminLogin] Login error:', e);
       Alert.alert('Login Failed', e?.message || 'Unable to login. For local testing, try: admin@example.com / 123456');
     } finally {
       setLoading(false);
