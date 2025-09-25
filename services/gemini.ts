@@ -21,12 +21,25 @@ export type GeminiAssistantReply = {
   door?: string;
 };
 
-const GEMINI_MODELS = [
-  'gemini-1.5-flash-latest',
-  'gemini-1.5-flash'
-];
+function normalizeModelName(model: string | undefined | null, fallback = 'models/gemini-1.5-flash-8b'): string {
+  const trimmed = (model || '').trim();
+  if (!trimmed) return fallback;
+  if (trimmed.startsWith('models/')) return trimmed;
+  return `models/${trimmed}`;
+}
 
-const getGeminiEndpoint = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+const GEMINI_API_VERSION = (process.env?.EXPO_PUBLIC_GEMINI_API_VERSION || 'v1').trim();
+
+const PRIMARY_MODEL = normalizeModelName(process.env?.EXPO_PUBLIC_GEMINI_MODEL, normalizeModelName(undefined));
+const FALLBACK_MODELS = [
+  normalizeModelName('gemini-1.5-pro'),
+  normalizeModelName('gemini-1.5-flash'),
+  normalizeModelName('gemini-1.5-pro-latest'),
+  normalizeModelName('gemini-1.5-flash-latest'),
+];
+const GEMINI_MODELS = Array.from(new Set([PRIMARY_MODEL, ...FALLBACK_MODELS]));
+
+const getGeminiEndpoint = (model: string) => `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/${model}:generateContent`;
 
 const RAW_API_BASE = process.env.EXPO_PUBLIC_API_BASE || '';
 
@@ -41,7 +54,46 @@ function buildAssistantUrl() {
 const ASSISTANT_URL = buildAssistantUrl();
 
 function getApiKey() {
-  return 'AIzaSyAcLNrhvMSahZk7BKr-rL2cMZAUm545_X4';
+  return 'AIzaSyBRh6UuOX94G9u5or5o1lBb-r-QP96Q3kw';
+}
+
+function cleanAssistantSpeech(text: string): string {
+  if (!text) return '';
+  const parts = text
+    .split('\n')
+    .map((line) => line.replace(/^Line\s*\d+\s*:\s*/i, '').trim())
+    .filter((line) => line && !/^COMMAND:/i.test(line))
+    .filter(Boolean);
+  return parts.join(' ').trim();
+}
+
+function interpretGeminiError(lastError: unknown): string | null {
+  if (!lastError) return null;
+  let errBlock: any = null;
+  if (typeof lastError === 'string') {
+    errBlock = { message: lastError };
+  } else if (typeof lastError === 'object') {
+    errBlock = lastError;
+  }
+
+  const apiError = errBlock?.error || errBlock;
+  const code = apiError?.code;
+  const status = (apiError?.status || '').toString();
+  const message = (apiError?.message || errBlock?.message || '').toString();
+
+  if (!message && !status && !code) return null;
+
+  const normalized = message.toLowerCase();
+
+  if (code === 429 || status === 'RESOURCE_EXHAUSTED' || /quota/i.test(normalized)) {
+    return 'The Gemini quota for this API key is exhausted right now. Please wait a few minutes or upgrade your Gemini plan before trying again.';
+  }
+
+  if (code === 404 || status === 'NOT_FOUND' || /not found/i.test(normalized)) {
+    return 'The selected Gemini model is not available for this API key. Check your Gemini subscription or set EXPO_PUBLIC_GEMINI_MODEL / GEMINI_MODEL to a model your project can access.';
+  }
+
+  return null;
 }
 
 async function tryGeminiModel(model, body, apiKey) {
@@ -67,6 +119,8 @@ async function tryGeminiModel(model, body, apiKey) {
 function buildPrompt(userText: string) {
   const system = `You are a helpful smart home voice assistant for "Smart Home By Nafisa Tabasum".
 You can control devices and answer questions naturally.
+
+Always give a helpful answer even if the question is unrelated to the smart home, then provide the command line.
 
 Available rooms: main hall (mainhall), bedroom 1 (bedroom1), bedroom 2 (bedroom2), kitchen
 Available devices: light, fan, ac (air conditioner)
@@ -355,7 +409,7 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
         const secondarySay = typeof payload?.say === 'string' ? payload.say.trim() : '';
         const rawFallback = partText.trim();
         const fallbackSay = /^COMMAND:/i.test(rawFallback) ? '' : rawFallback;
-        const sayText = primarySay || secondarySay || fallbackSay || 'Okay.';
+        const sayText = cleanAssistantSpeech(primarySay || secondarySay || fallbackSay || 'Okay.');
 
         const action = typeof payload?.action === 'string' ? (payload.action as string).trim() : 'none';
 
@@ -383,11 +437,13 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   // Fallback to local command parsing when Gemini is unavailable
   console.log('[Gemini] Falling back to local command parser');
   const localResult = parseLocalCommand(userText);
+
+  const friendlyError = interpretGeminiError(lastError);
   
   if (localResult.success) {
     return {
       action: (localResult.action as GeminiAction) || 'none',
-      say: localResult.say,
+      say: cleanAssistantSpeech(localResult.say),
       room: localResult.room,
       device: localResult.device,
       value: localResult.value,
@@ -396,7 +452,7 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   }
   
   return {
-    say: localResult.say || "I'm having trouble connecting to the cloud assistant. I can still help with basic commands like 'turn on lights' or 'lock doors'.",
+    say: cleanAssistantSpeech(friendlyError || localResult.say || "I'm having trouble connecting to the cloud assistant. I can still help with basic commands like 'turn on lights' or 'lock doors'."),
     action: 'none',
   };
 }

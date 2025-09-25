@@ -6,6 +6,11 @@
   ```bash
   export EXPO_PUBLIC_GEMINI_API_KEY="your-google-gemini-key"
   ```
+- Optionally specify the model/version if your project uses something other than the default `models/gemini-1.5-flash-8b` on `v1`:
+  ```bash
+  export EXPO_PUBLIC_GEMINI_MODEL="models/gemini-1.5-flash-8b"
+  export EXPO_PUBLIC_GEMINI_API_VERSION="v1"
+  ```
 - Configure the backend base URL if you need remote device control:
   ```bash
   export EXPO_PUBLIC_API_BASE="https://your-server.example.com"

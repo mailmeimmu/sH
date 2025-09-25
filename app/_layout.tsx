@@ -25,6 +25,10 @@ export default function RootLayout() {
     '/splash',
     '/+not-found',
   ]), []);
+  const adminRoutes = useMemo(() => new Set([
+    '/admin-login',
+    '/admin-users',
+  ]), []);
 
   useEffect(() => {
     console.log('[NafisaSmartHome] RootLayout mounted, platform:', Platform.OS);
@@ -62,12 +66,16 @@ export default function RootLayout() {
     if (routes.length === 0) return;
 
     const authed = !!db.getCurrentUser?.();
+    const adminSession = db.getAdminSession?.();
+    const adminAuthed = !!adminSession?.token;
     if (!segments?.length) return;
 
     const top = segments[0];
     const normalized = top === '(tabs)' ? '/(tabs)' : `/${top || ''}`;
 
-    if (!authed) {
+    const isAdminRoute = adminRoutes.has(normalized);
+
+    if (!authed && !adminAuthed) {
       if (!publicRoutes.has(normalized) && normalized !== '/login') {
         console.log('[NafisaSmartHome] Redirecting to login from:', normalized);
         setTimeout(() => {
@@ -78,6 +86,12 @@ export default function RootLayout() {
           }
         }, 100);
       }
+      return;
+    }
+
+    if (!authed && adminAuthed && isAdminRoute) {
+      // Admin-only routes are allowed when a super admin session exists.
+      return;
     }
   }, [segments, publicRoutes, rootNavigation?.key, rootNavigation?.routes, isReady]);
 
