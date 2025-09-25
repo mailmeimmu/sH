@@ -90,6 +90,8 @@ class DatabaseService {
     this.faceData = new Map();
     this.currentUser = null;
     this.adminSession = null;
+    this.deviceStates = new Map(); // Track device states locally
+    this.deviceListeners = new Set(); // Device state listeners
 
     // Simple in-memory door lock model
     // true = locked, false = unlocked
@@ -107,10 +109,34 @@ class DatabaseService {
     this.ready = false;
     this.readyPromise = this.initializeStorage()
       .then(() => { this.ready = true; console.log('[DB] Ready at', this.dbPath); })
-      .catch((e) => { this.ready = true; console.log('[DB] init error', e?.message || e); });
+      .catch((e) => { 
+        this.ready = true; 
+        console.log('[DB] init error', e?.message || e);
+        // Initialize with defaults even if storage fails
+        this.initializeDefaults();
+      });
 
     // Start with empty household; first registration becomes owner
     this.initializeDemoUsers();
+  }
+
+  initializeDefaults() {
+    // Ensure we have basic data structures even if storage fails
+    if (this.members.size === 0) {
+      const adminUser = {
+        id: 'admin-default',
+        name: 'Admin User',
+        email: 'admin@example.com',
+        role: 'admin',
+        relation: 'owner',
+        pin: '123456',
+        preferredLogin: 'pin',
+        policies: this.defaultPolicies('admin'),
+        registeredAt: new Date().toISOString(),
+      };
+      this.members.set(adminUser.id, adminUser);
+      this.users.set(adminUser.id, adminUser);
+    }
   }
 
   initializeDemoUsers() {
@@ -570,8 +596,9 @@ class DatabaseService {
 
   // --- Family management ---
   defaultPolicies(_role) {
+    const role = _role || 'member';
     const areaPermissions = { light: true, fan: true, ac: true, door: true };
-    return {
+    const basePolicies = {
       controls: {
         devices: true,
         doors: true,
@@ -584,8 +611,22 @@ class DatabaseService {
         bedroom1: { ...areaPermissions },
         bedroom2: { ...areaPermissions },
         kitchen: { ...areaPermissions },
+        hall: { ...areaPermissions },
+        bathroom: { ...areaPermissions },
+        main: { door: true },
       },
     };
+    
+    // Adjust permissions based on role
+    if (role === 'child') {
+      basePolicies.controls.unlockDoors = false;
+      basePolicies.controls.doors = false;
+      basePolicies.areas.main = { door: false };
+    } else if (role === 'member') {
+      basePolicies.controls.unlockDoors = true;
+    }
+    
+    return basePolicies;
   }
 
   addMember({ name, role = 'member', relation = 'member', email = '', pin = '' }) {
@@ -654,6 +695,10 @@ class DatabaseService {
   can(action, resource) {
     const u = this.currentUser;
     if (!u) return false;
+    
+    // Admin and parent roles have full access
+    if (u.role === 'admin' || u.role === 'parent') return true;
+    
     const p = u.policies || this.defaultPolicies(u.role);
     switch (action) {
       case 'device.toggle':
@@ -671,7 +716,7 @@ class DatabaseService {
       case 'power.view':
         return !!p.controls.power;
       default:
-        return true;
+        return false;
     }
   }
 
@@ -695,6 +740,10 @@ class DatabaseService {
 
   canDevice(room, device) {
     const u = this.currentUser; if (!u) return false;
+    
+    // Admin and parent roles have full access
+    if (u.role === 'admin' || u.role === 'parent') return true;
+    
     const p = u.policies || this.defaultPolicies(u.role);
     if (!p.controls.devices) return false;
     const area = this.roomToArea(room);
@@ -704,6 +753,10 @@ class DatabaseService {
 
   canDoorAction(door, unlocking) {
     const u = this.currentUser; if (!u) return false;
+    
+    // Admin and parent roles have full access
+    if (u.role === 'admin' || u.role === 'parent') return true;
+    
     const p = u.policies || this.defaultPolicies(u.role);
     if (!p.controls.doors) return false;
     if (unlocking && !p.controls.unlockDoors) return false;

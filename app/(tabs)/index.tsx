@@ -143,10 +143,18 @@ export default function HomeControlScreen() {
   }, []);
 
   const loadDeviceStates = useCallback(async () => {
-    if (!remoteApi.enabled) return;
+    if (!remoteApi.enabled) {
+      // Initialize with default states for local mode
+      const initialStates: Record<string, boolean> = {};
+      ALL_DEVICE_IDS.forEach((id) => { initialStates[id] = false; });
+      setDeviceStates(initialStates);
+      return;
+    }
+    
     setLoadingDevices(true);
     try {
       const snapshot = await remoteApi.getDeviceStates(ALL_DEVICE_IDS);
+      console.log('[Home] Loaded device states:', snapshot);
       setDeviceStates((prev) => {
         const next = { ...prev };
         ALL_DEVICE_IDS.forEach((id) => {
@@ -156,7 +164,11 @@ export default function HomeControlScreen() {
         return next;
       });
     } catch (e) {
-      console.warn('[Home] failed to load device states', e);
+      console.warn('[Home] Failed to load device states, using local fallback:', e);
+      // Fallback to local states
+      const fallbackStates: Record<string, boolean> = {};
+      ALL_DEVICE_IDS.forEach((id) => { fallbackStates[id] = false; });
+      setDeviceStates(fallbackStates);
     } finally {
       setLoadingDevices(false);
     }
@@ -213,14 +225,23 @@ export default function HomeControlScreen() {
   };
 
   const updateDeviceState = useCallback(async (deviceId: string, on: boolean) => {
+    // Optimistic update
+    const previousState = deviceStates[deviceId];
     setDeviceStates((prev) => ({ ...prev, [deviceId]: on }));
+    
     if (remoteApi.enabled) {
       try {
         await remoteApi.setDeviceState(deviceId, on ? 1 : 0);
+        console.log(`[Home] Device ${deviceId} set to ${on ? 'ON' : 'OFF'}`);
       } catch (err) {
+        // Revert optimistic update on failure
         setDeviceStates((prev) => ({ ...prev, [deviceId]: !on }));
+        console.error(`[Home] Failed to update device ${deviceId}:`, err);
         throw err;
       }
+    } else {
+      // For local mode, just update the state
+      console.log(`[Home] Device ${deviceId} set to ${on ? 'ON' : 'OFF'} (local mode)`);
     }
   }, []);
 

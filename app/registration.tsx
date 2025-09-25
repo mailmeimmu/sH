@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, Platform, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { Camera as CameraIcon, User, Save, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { db } from '../services/database';

@@ -40,26 +40,30 @@ export default function AdminLoginScreen() {
           loginResult = await remoteApi.adminLogin(email.trim(), pin.trim());
           console.log('[AdminLogin] Remote login result:', loginResult);
         } catch (error) {
-          console.log('[AdminLogin] Remote login failed, trying local fallback:', error);
+          console.log('[AdminLogin] Remote login failed, trying local fallback:', (error as any)?.message || error);
         }
       }
       
       // Local fallback for admin login
       if (!loginResult) {
         console.log('[AdminLogin] Using local admin authentication');
-        // Check for default admin user
+        
+        // Ensure database is ready
+        await db.readyPromise;
+        
         const allUsers = db.getAllUsers();
-        console.log('[AdminLogin] All users:', allUsers.length);
-        const adminUser = allUsers.find(u => u.role === 'admin' && u.email === email.trim() && u.pin === pin.trim());
+        console.log('[AdminLogin] All users:', allUsers.length, allUsers.map(u => ({ id: u.id, name: u.name, role: u.role })));
+        
+        let adminUser = allUsers.find(u => u.role === 'admin' && u.email === email.trim() && u.pin === pin.trim());
         
         if (adminUser) {
           console.log('[AdminLogin] Found existing admin user:', adminUser.name);
-          loginResult = { user: adminUser, token: 'local-admin-token' };
+          loginResult = { success: true, user: adminUser, token: 'local-admin-token' };
         } else {
           // Create default admin if credentials match expected defaults
           if (email.trim() === 'admin@example.com' && pin.trim() === '123456') {
             console.log('[AdminLogin] Creating default admin user');
-            const defaultAdmin = {
+            const newAdmin = {
               id: 'admin-' + Date.now(),
               name: 'Super Admin',
               email: 'admin@example.com',
@@ -71,18 +75,31 @@ export default function AdminLoginScreen() {
               registeredAt: new Date().toISOString()
             };
             
-            db.users.set(defaultAdmin.id, defaultAdmin);
-            db.members.set(defaultAdmin.id, defaultAdmin);
+            // Add to database properly
+            db.users.set(newAdmin.id, newAdmin);
+            db.members.set(newAdmin.id, newAdmin);
             db.persistMembersToWeb();
+            
+            // Persist to SQLite if available
+            try {
+              if (db.db) {
+                await exec(db.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+                  newAdmin.id, newAdmin.name, newAdmin.email, newAdmin.role, newAdmin.relation, newAdmin.pin, newAdmin.preferredLogin, JSON.stringify(newAdmin.policies), '', '', newAdmin.registeredAt
+                ]);
+              }
+            } catch (e) {
+              console.warn('[AdminLogin] Failed to persist to SQLite:', e);
+            }
+            
             console.log('[AdminLogin] Default admin created successfully');
-            loginResult = { user: defaultAdmin, token: 'local-admin-token' };
+            loginResult = { success: true, user: newAdmin, token: 'local-admin-token' };
           } else {
             console.log('[AdminLogin] Invalid credentials provided');
           }
         }
       }
       
-      if (loginResult && loginResult.user && loginResult.token) {
+      if (loginResult && loginResult.success && loginResult.user && loginResult.token) {
         console.log('[AdminLogin] Login successful, setting session');
         db.setAdminSession({ ...loginResult.user, token: loginResult.token });
         remoteApi.setAdminToken(loginResult.token);
@@ -92,9 +109,9 @@ export default function AdminLoginScreen() {
         console.log('[AdminLogin] Login failed - no valid result');
         Alert.alert('Login Failed', 'Invalid credentials.');
       }
-    } catch (e: any) {
+    } catch (e) {
       console.log('[AdminLogin] Login error:', e);
-      Alert.alert('Login Failed', e?.message || 'Unable to login. For local testing, try: admin@example.com / 123456');
+      Alert.alert('Login Failed', (e as any)?.message || 'Unable to login. For local testing, try: admin@example.com / 123456');
     } finally {
       setLoading(false);
     }

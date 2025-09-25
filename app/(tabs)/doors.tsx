@@ -53,50 +53,73 @@ export default function DoorsScreen() {
   }, []);
 
   const toggle = async (name: string) => {
+    console.log(`[Doors] Toggling door: ${name}`);
+    
     if (remoteApi.enabled) {
       try {
         const result: any = await remoteApi.toggleDoor(name);
-        db.setDoorState(name, !!result?.locked);
+        const newState = !!result?.locked;
+        console.log(`[Doors] Remote toggle result for ${name}: ${newState ? 'locked' : 'unlocked'}`);
+        db.setDoorState(name, newState);
       } catch (e:any) {
+        console.error(`[Doors] Remote toggle failed for ${name}:`, e);
         Alert.alert('Door', e.message || 'Not allowed');
       }
     } else {
       const res = db.toggleDoor(name);
       if (!res.success) {
+        console.log(`[Doors] Local toggle failed for ${name}:`, res.error);
         Alert.alert('Door', res.error || 'Not allowed');
+      } else {
+        console.log(`[Doors] Local toggle success for ${name}: ${res.locked ? 'locked' : 'unlocked'}`);
       }
     }
   };
 
   const lockAll = async () => {
+    console.log('[Doors] Locking all doors');
+    
     if (remoteApi.enabled) {
       try {
         await remoteApi.lockAllDoors();
         const nextState = DOOR_KEYS.reduce((acc, key) => ({ ...acc, [key]: true }), {} as Record<string, boolean>);
         db.setDoorStates(nextState);
+        console.log('[Doors] All doors locked successfully (remote)');
       } catch (e:any) {
+        console.error('[Doors] Failed to lock all doors (remote):', e);
         Alert.alert('Door', e.message || 'Failed');
       }
     } else {
       const r = db.lockAllDoors();
       if (!r.success) {
+        console.log('[Doors] Failed to lock all doors (local):', r.error);
         Alert.alert('Door', r.error);
+      } else {
+        console.log('[Doors] All doors locked successfully (local)');
       }
     }
   };
+  
   const unlockAll = async () => {
+    console.log('[Doors] Unlocking all doors');
+    
     if (remoteApi.enabled) {
       try {
         await remoteApi.unlockAllDoors();
         const nextState = DOOR_KEYS.reduce((acc, key) => ({ ...acc, [key]: false }), {} as Record<string, boolean>);
         db.setDoorStates(nextState);
+        console.log('[Doors] All doors unlocked successfully (remote)');
       } catch (e:any) {
+        console.error('[Doors] Failed to unlock all doors (remote):', e);
         Alert.alert('Door', e.message || 'Failed');
       }
     } else {
       const r = db.unlockAllDoors();
       if (!r.success) {
+        console.log('[Doors] Failed to unlock all doors (local):', r.error);
         Alert.alert('Door', r.error);
+      } else {
+        console.log('[Doors] All doors unlocked successfully (local)');
       }
     }
   };

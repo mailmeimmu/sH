@@ -82,6 +82,14 @@ const ROOM_DEVICE_ID_MAP: Record<'mainhall' | 'bedroom1' | 'bedroom2' | 'kitchen
   },
 };
 
+// Update ALL_DEVICE_IDS in the main home screen to match these IDs
+const VOICE_ALL_DEVICE_IDS = [
+  'mainhall-light-1', 'mainhall-light-2', 'mainhall-fan-1', 'mainhall-ac-1',
+  'bedroom1-light-1', 'bedroom1-fan-1', 'bedroom1-ac-1',
+  'bedroom2-light-1', 'bedroom2-fan-1', 'bedroom2-ac-1',
+  'kitchen-light-1'
+];
+
 const ROOM_KEYS = Object.keys(ROOM_DEVICE_ID_MAP) as Array<keyof typeof ROOM_DEVICE_ID_MAP>;
 
 const ROOM_KEYWORDS: Record<keyof typeof ROOM_DEVICE_ID_MAP | 'all', string[]> = {
@@ -269,6 +277,7 @@ export default function VoiceControlScreen() {
 
     const denied: string[] = [];
     const errors: string[] = [];
+    const successful: string[] = [];
 
     for (const room of targetRooms) {
       const policyRoom = mapRoomToPolicyKey(room);
@@ -280,12 +289,17 @@ export default function VoiceControlScreen() {
       const deviceIds = ROOM_DEVICE_ID_MAP[room]?.[deviceType] || [];
       if (!deviceIds.length) continue;
 
-      if (remoteApi.enabled) {
-        try {
+      try {
+        if (remoteApi.enabled) {
           await Promise.all(deviceIds.map((id) => remoteApi.setDeviceState(id, desired === 'on' ? 1 : 0)));
-        } catch (error: any) {
-          errors.push(getRoomDisplayName(room));
+        } else {
+          // For local mode, just log the action
+          console.log(`[Voice] Local mode: Setting ${deviceIds.join(', ')} to ${desired}`);
         }
+        successful.push(getRoomDisplayName(room));
+      } catch (error: any) {
+        console.error(`[Voice] Failed to control ${deviceType} in ${room}:`, error);
+        errors.push(getRoomDisplayName(room));
       }
     }
 
@@ -294,7 +308,10 @@ export default function VoiceControlScreen() {
     }
 
     if (errors.length) {
-      return `Failed to update the ${deviceType} in ${errors.join(', ')}.`;
+      if (successful.length) {
+        return `Updated ${deviceType} in ${successful.join(', ')}, but failed in ${errors.join(', ')}.`;
+      }
+      return `Failed to update the ${deviceType} in ${errors.join(', ')}. Please check your network connection.`;
     }
 
     if (reply.say && reply.say.trim().length) {
@@ -309,31 +326,51 @@ export default function VoiceControlScreen() {
   };
 
   const executeDoorAction = async (reply: GeminiAssistantReply): Promise<string> => {
-    const door = normalizeDoorKey(reply.door);
+    const door = reply.door || 'mainhall';
+    const doorKey = normalizeDoorKey(door);
+    
     switch (reply.action) {
       case 'door.lock':
       case 'door.unlock': {
         const desiredLock = reply.action === 'door.lock';
+        
+        // Check permissions
+        if (!db.canDoorAction(doorKey, !desiredLock)) {
+          return `You are not allowed to ${desiredLock ? 'lock' : 'unlock'} the ${getRoomDisplayName(doorKey)} door.`;
+        }
+        
         if (remoteApi.enabled) {
           try {
             const currentSnapshot = await remoteApi.getDoors();
-            const currentlyLocked = Boolean(currentSnapshot?.[door]);
+            const currentlyLocked = Boolean(currentSnapshot?.[doorKey]);
             if (currentlyLocked !== desiredLock) {
-              const result: any = await remoteApi.toggleDoor(door);
+              const result: any = await remoteApi.toggleDoor(doorKey);
               const locked = Boolean(result?.locked);
               if (locked !== desiredLock) {
                 return 'The door state could not be confirmed.';
               }
             }
+            console.log(`[Voice] Door ${doorKey} ${desiredLock ? 'locked' : 'unlocked'} successfully`);
             return reply.say || (desiredLock ? 'Door locked.' : 'Door unlocked.');
           } catch (error: any) {
+            console.error(`[Voice] Failed to control door ${doorKey}:`, error);
             return error?.message || 'Failed to update the door state.';
           }
+        } else {
+          // Local mode
+          const res = db.toggleDoor(doorKey);
+          if (!res.success) {
+            return res.error || 'Door action not allowed.';
+          }
+          console.log(`[Voice] Local mode: Door ${doorKey} ${res.locked ? 'locked' : 'unlocked'}`);
+          return reply.say || (res.locked ? 'Door locked.' : 'Door unlocked.');
         }
-        const currentlyLocked = db.getDoorState(door);
+        
+        /* Remove unreachable code
+        const currentlyLocked = db.getDoorState(doorKey);
         if (typeof currentlyLocked === 'boolean') {
           if (currentlyLocked !== desiredLock) {
-            const res = db.toggleDoor(door);
+            const res = db.toggleDoor(doorKey);
             if (!res.success) {
               return res.error || 'Door action not allowed.';
             }
@@ -343,33 +380,52 @@ export default function VoiceControlScreen() {
           }
           return reply.say || (desiredLock ? 'Door locked.' : 'Door unlocked.');
         }
-        const res = db.toggleDoor(door);
+        const res = db.toggleDoor(doorKey);
         if (!res.success) return res.error || 'Door action not allowed.';
         return reply.say || (res.locked ? 'Door locked.' : 'Door unlocked.');
+        */
       }
       case 'door.lock_all': {
+        if (!db.can('door.lockAll')) {
+          return 'You are not allowed to lock all doors.';
+        }
+        
         if (remoteApi.enabled) {
           try {
             await remoteApi.lockAllDoors();
+            console.log('[Voice] All doors locked successfully (remote)');
           } catch (error: any) {
+            console.error('[Voice] Failed to lock all doors:', error);
             return error?.message || 'Failed to lock all doors.';
           }
         } else {
           const res = db.lockAllDoors();
-          if (!res.success) return res.error || 'Lock all action not allowed.';
+          if (!res.success) {
+            return res.error || 'Lock all action not allowed.';
+          }
+          console.log('[Voice] All doors locked successfully (local)');
         }
         return reply.say || 'All doors locked.';
       }
       case 'door.unlock_all': {
+        if (!db.can('door.unlockAll')) {
+          return 'You are not allowed to unlock all doors.';
+        }
+        
         if (remoteApi.enabled) {
           try {
             await remoteApi.unlockAllDoors();
+            console.log('[Voice] All doors unlocked successfully (remote)');
           } catch (error: any) {
+            console.error('[Voice] Failed to unlock all doors:', error);
             return error?.message || 'Failed to unlock all doors.';
           }
         } else {
           const res = db.unlockAllDoors();
-          if (!res.success) return res.error || 'Unlock all action not allowed.';
+          if (!res.success) {
+            return res.error || 'Unlock all action not allowed.';
+          }
+          console.log('[Voice] All doors unlocked successfully (local)');
         }
         return reply.say || 'All doors unlocked.';
       }
@@ -438,7 +494,7 @@ export default function VoiceControlScreen() {
       updateSuggestions(text, reply);
       await speakResponse(responseMessage);
     } catch (e) {
-      responseMessage = `Sorry, I had trouble processing that command. ${e?.message || 'Please try again.'}`;
+      responseMessage = `Sorry, I had trouble processing that command. ${(e as any)?.message || 'Please try again.'}`;
       console.log('[Voice] Error processing command:', e);
       addAssistantMessage(responseMessage);
       await speakResponse(responseMessage);

@@ -245,7 +245,10 @@ class VoiceService {
   }
 
   async speak(text) {
-    if (!text || typeof text !== 'string') return;
+    if (!text || typeof text !== 'string') {
+      console.log('[Voice] No text to speak');
+      return;
+    }
     
     console.log('[Voice] Speaking:', text);
     
@@ -267,7 +270,10 @@ class VoiceService {
           Speech.speak(text, { 
             onDone: resolve, 
             onStopped: resolve, 
-            onError: resolve,
+            onError: (error) => {
+              console.log('[Voice] Speech synthesis error:', error);
+              resolve();
+            },
             language: 'en-US', 
             rate: 0.85,
             volume: 0.8
@@ -284,8 +290,14 @@ class VoiceService {
       utterance.volume = 0.8;
       
       return new Promise((resolve) => {
-        utterance.onend = resolve;
-        utterance.onerror = resolve;
+        utterance.onend = () => {
+          console.log('[Voice] Speech synthesis completed');
+          resolve();
+        };
+        utterance.onerror = (error) => {
+          console.log('[Voice] Speech synthesis error:', error);
+          resolve();
+        };
         this.synthesis.speak(utterance);
       });
     } else {

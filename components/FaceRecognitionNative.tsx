@@ -85,7 +85,9 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
     scanning.value = false;
     scanningRef.current = false;
     setStatusText('Processing face...');
-    handleDetectedFace(faces[0]);
+    if (faces[0]) {
+      handleDetectedFace(faces[0]);
+    }
   }, [handleDetectedFace, scanning]);
 
   const frameProcessor = useFrameProcessor((frame) => {
