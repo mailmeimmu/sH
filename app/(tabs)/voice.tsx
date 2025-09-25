@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
-import { Mic, MicOff, Volume2, VolumeX } from 'lucide-react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { Mic, MicOff, Volume2, VolumeX, Send } from 'lucide-react-native';
 import { voiceService } from '../../services/voice';
 import { askGemini, type GeminiAssistantReply, type ChatMessage } from '../../services/gemini';
 import { db } from '../../services/database';
@@ -17,6 +17,12 @@ type QuickCommand = {
 };
 
 const QUICK_COMMANDS: QuickCommand[] = [
+  { label: 'All Lights On', phrase: 'Turn on all the lights', tone: 'positive' },
+  { label: 'All Lights Off', phrase: 'Turn off all the lights', tone: 'negative' },
+  { label: 'All Fans On', phrase: 'Turn on all the fans', tone: 'positive' },
+  { label: 'All Fans Off', phrase: 'Turn off all the fans', tone: 'negative' },
+  { label: 'All AC On', phrase: 'Turn on all the air conditioners', tone: 'positive' },
+  { label: 'All AC Off', phrase: 'Turn off all the air conditioners', tone: 'negative' },
   { label: 'Main Hall Lights On', phrase: 'Turn on all lights in the main hall', tone: 'positive' },
   { label: 'Main Hall Lights Off', phrase: 'Turn off all lights in the main hall', tone: 'negative' },
   { label: 'Light A On', phrase: 'Turn on main hall light A', tone: 'positive' },
@@ -53,7 +59,7 @@ const QUICK_COMMANDS: QuickCommand[] = [
   { label: 'Unlock All Doors', phrase: 'Unlock all doors', tone: 'neutral' },
 ];
 
-const ROOM_DEVICE_ID_MAP: Record<string, Record<DeviceType, string[]>> = {
+const ROOM_DEVICE_ID_MAP: Record<'mainhall' | 'bedroom1' | 'bedroom2' | 'kitchen', Record<DeviceType, string[]>> = {
   mainhall: {
     light: ['mainhall-light-1', 'mainhall-light-2'],
     fan: ['mainhall-fan-1'],
@@ -76,6 +82,18 @@ const ROOM_DEVICE_ID_MAP: Record<string, Record<DeviceType, string[]>> = {
   },
 };
 
+const ROOM_KEYS = Object.keys(ROOM_DEVICE_ID_MAP) as Array<keyof typeof ROOM_DEVICE_ID_MAP>;
+
+const ROOM_KEYWORDS: Record<keyof typeof ROOM_DEVICE_ID_MAP | 'all', string[]> = {
+  mainhall: ['main hall', 'living room', 'hall', 'mainhall'],
+  bedroom1: ['bedroom 1', 'room 1', 'first bedroom', 'bedroom1'],
+  bedroom2: ['bedroom 2', 'room 2', 'second bedroom', 'bedroom2'],
+  kitchen: ['kitchen'],
+  all: ['all', 'everywhere', 'entire house', 'whole house', 'whole home'],
+};
+
+type RoomKey = keyof typeof ROOM_DEVICE_ID_MAP | 'all';
+
 const INITIAL_ASSISTANT_MESSAGE: ConversationEntry = {
   type: 'assistant',
   message: 'Hello! I\'m your smart home voice assistant. Try saying "Lock the main hall door" or "Turn on the bedroom 1 fan".',
@@ -86,8 +104,11 @@ export default function VoiceControlScreen() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [conversationHistory, setConversationHistory] = useState<ConversationEntry[]>([INITIAL_ASSISTANT_MESSAGE]);
-  const [autoMode, setAutoMode] = useState(true);
+  const [autoMode, setAutoMode] = useState(false);
   const [speakEnabled, setSpeakEnabled] = useState(true);
+  const [typedMessage, setTypedMessage] = useState('');
+  const [suggestions, setSuggestions] = useState<QuickCommand[]>([]);
+  const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     // Initialize and destroy the voice service
@@ -104,6 +125,10 @@ export default function VoiceControlScreen() {
       return () => clearTimeout(t);
     }
   }, [autoMode, isListening, isSpeaking]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollToEnd({ animated: true });
+  }, [conversationHistory]);
 
   const addUserMessage = (message: string) => {
     setConversationHistory((prev) => [...prev, { type: 'user' as const, message }]);
@@ -164,8 +189,11 @@ export default function VoiceControlScreen() {
     }
   };
 
-  const normalizeRoomKey = (room?: string): keyof typeof ROOM_DEVICE_ID_MAP => {
+  const normalizeRoomKey = (room?: string): RoomKey => {
     const value = (room || '').toLowerCase();
+    if (value.includes('all') || value.includes('everywhere') || value.includes('whole') || value.includes('entire')) {
+      return 'all';
+    }
     if (value.includes('kitchen')) return 'kitchen';
     if (value.includes('bedroom 2') || value.includes('room 2') || value.includes('second bedroom')) return 'bedroom2';
     if (value.includes('bedroom 1') || value.includes('room 1') || value.includes('first bedroom') || value.includes('bedroom')) return 'bedroom1';
@@ -186,7 +214,7 @@ export default function VoiceControlScreen() {
     }
   };
 
-  const getRoomDisplayName = (roomKey: keyof typeof ROOM_DEVICE_ID_MAP): string => {
+  const getRoomDisplayName = (roomKey: RoomKey): string => {
     switch (roomKey) {
       case 'bedroom1':
         return 'bedroom 1';
@@ -194,12 +222,14 @@ export default function VoiceControlScreen() {
         return 'bedroom 2';
       case 'kitchen':
         return 'kitchen';
+      case 'all':
+        return 'whole home';
       default:
         return 'main hall';
     }
   };
 
-  const normalizeDoorKey = (door?: string): 'mainhall' | 'bedroom1' | 'bedroom2' | 'kitchen' => {
+  const normalizeDoorKey = (door?: string): RoomKey => {
     const value = (door || '').toLowerCase();
     if (value.includes('bedroom 2') || value.includes('room 2') || value.includes('second')) return 'bedroom2';
     if (value.includes('bedroom 1') || value.includes('room 1') || value.includes('first') || value.includes('bedroom')) return 'bedroom1';
@@ -224,22 +254,48 @@ export default function VoiceControlScreen() {
     const roomKey = normalizeRoomKey(reply.room);
     const deviceType = ensureDeviceType(reply.device);
     const desired = (reply.value || 'on').toLowerCase() === 'off' ? 'off' : 'on';
-    const policyRoom = mapRoomToPolicyKey(roomKey);
+    const targetRooms: (keyof typeof ROOM_DEVICE_ID_MAP)[] =
+      roomKey === 'all' ? [...ROOM_KEYS] : [roomKey as keyof typeof ROOM_DEVICE_ID_MAP];
 
-    if (!db.canDevice(policyRoom, deviceType)) {
-      return `You are not allowed to control the ${deviceType} in the ${getRoomDisplayName(roomKey)}.`;
-    }
+    const denied: string[] = [];
+    const errors: string[] = [];
 
-    const deviceIds = ROOM_DEVICE_ID_MAP[roomKey]?.[deviceType] || [];
-    if (remoteApi.enabled && deviceIds.length) {
-      try {
-        await Promise.all(deviceIds.map((id) => remoteApi.setDeviceState(id, desired === 'on' ? 1 : 0)));
-      } catch (error: any) {
-        return error?.message || `Failed to set the ${deviceType} in the ${getRoomDisplayName(roomKey)}.`;
+    for (const room of targetRooms) {
+      const policyRoom = mapRoomToPolicyKey(room);
+      if (!db.canDevice(policyRoom, deviceType)) {
+        denied.push(getRoomDisplayName(room));
+        continue;
+      }
+
+      const deviceIds = ROOM_DEVICE_ID_MAP[room]?.[deviceType] || [];
+      if (!deviceIds.length) continue;
+
+      if (remoteApi.enabled) {
+        try {
+          await Promise.all(deviceIds.map((id) => remoteApi.setDeviceState(id, desired === 'on' ? 1 : 0)));
+        } catch (error: any) {
+          errors.push(getRoomDisplayName(room));
+        }
       }
     }
 
-    return reply.say || `Turning ${desired} the ${deviceType} in the ${getRoomDisplayName(roomKey)}.`;
+    if (denied.length) {
+      return `You are not allowed to control the ${deviceType} in ${denied.join(', ')}.`;
+    }
+
+    if (errors.length) {
+      return `Failed to update the ${deviceType} in ${errors.join(', ')}.`;
+    }
+
+    if (reply.say && reply.say.trim().length) {
+      return reply.say.trim();
+    }
+
+    if (roomKey === 'all') {
+      return `Turning ${desired} all ${deviceType === 'light' ? 'lights' : deviceType === 'fan' ? 'fans' : 'air conditioners'}.`;
+    }
+
+    return `Turning ${desired} the ${deviceType} in the ${getRoomDisplayName(roomKey)}.`;
   };
 
   const executeDoorAction = async (reply: GeminiAssistantReply): Promise<string> => {
@@ -312,6 +368,30 @@ export default function VoiceControlScreen() {
     }
   };
 
+  const sendMessage = async (raw: string) => {
+    const message = raw.trim();
+    if (!message) return;
+    setTypedMessage('');
+    updateSuggestions('');
+    await handleVoiceCommand(message);
+  };
+
+  const submitTypedMessage = async () => {
+    await sendMessage(typedMessage);
+  };
+
+  const handleToggleAutoMode = () => {
+    const next = !autoMode;
+    setAutoMode(next);
+    if (next) {
+      if (!isListening && !isSpeaking) {
+        startListening();
+      }
+    } else if (isListening) {
+      stopListening();
+    }
+  };
+
   const executeAssistantReply = async (reply: GeminiAssistantReply): Promise<string> => {
     switch (reply.action) {
       case 'device.set':
@@ -336,6 +416,7 @@ export default function VoiceControlScreen() {
       const reply = await askGemini(text, chatHistory);
       const message = await executeAssistantReply(reply);
       addAssistantMessage(message);
+      updateSuggestions(text, reply);
       await speakResponse(message);
     } catch (e) {
       const fallback = 'Sorry, I could not contact the assistant service.';
@@ -344,11 +425,63 @@ export default function VoiceControlScreen() {
     }
   };
 
+  const updateSuggestions = (input: string, reply?: GeminiAssistantReply) => {
+    const loweredInput = input.toLowerCase();
+
+    if (!reply && loweredInput.trim().length === 0) {
+      setSuggestions([]);
+      return;
+    }
+
+    const selectByRoom = (roomKey: RoomKey) => {
+      const keywords = ROOM_KEYWORDS[roomKey] || [];
+      if (!keywords.length) return [];
+      return QUICK_COMMANDS.filter((cmd) => {
+        const phrase = cmd.phrase.toLowerCase();
+        return keywords.some((keyword) => phrase.includes(keyword));
+      }).slice(0, 3);
+    };
+
+    let next: QuickCommand[] = [];
+
+    if (reply) {
+      if (reply.action === 'device.set' && reply.room) {
+        const roomKey = normalizeRoomKey(reply.room);
+        next = selectByRoom(roomKey);
+      } else if (reply.action?.startsWith('door.')) {
+        if (reply.door) {
+          const doorKey = normalizeDoorKey(reply.door);
+          next = selectByRoom(doorKey);
+        } else {
+          next = QUICK_COMMANDS.filter((cmd) => cmd.phrase.includes('door')).slice(0, 3);
+        }
+      } else if (reply.action === 'none') {
+        next = [];
+      }
+    }
+
+    if (!next.length && loweredInput) {
+      const matched = QUICK_COMMANDS.filter((cmd) =>
+        cmd.phrase.toLowerCase().includes(loweredInput)
+      );
+      if (matched.length) {
+        next = matched.slice(0, 3);
+      }
+    }
+
+    setSuggestions(next.slice(0, 3));
+  };
+
+  const handleTypedChange = (value: string) => {
+    setTypedMessage(value);
+    updateSuggestions(value);
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Voice Control</Text>
-        <Text style={styles.subtitle}>Speak to control your smart home</Text>
+        <Text style={styles.subtitle}>Chat or speak with your smart home assistant</Text>
       </View>
       {/* Greeting on mount */}
       {conversationHistory.length <= 1 && (
@@ -373,7 +506,13 @@ export default function VoiceControlScreen() {
         </View>
       )}
 
-      <ScrollView style={styles.conversationContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.conversationContainer}
+        contentContainerStyle={styles.conversationContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         {conversationHistory.map((message, index) => (
           <View 
             key={index}
@@ -392,7 +531,12 @@ export default function VoiceControlScreen() {
         ))}
       </ScrollView>
 
-      <View style={styles.controlsContainer}>
+      <KeyboardAvoidingView
+        style={styles.keyboardContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
+        <View style={styles.controlsContainer}>
         {transcript ? (
           <View style={styles.transcriptContainer}>
             <Text style={styles.transcriptLabel}>You said:</Text>
@@ -400,62 +544,88 @@ export default function VoiceControlScreen() {
           </View>
         ) : null}
 
-        <View style={styles.buttonContainer}>
+        <View style={styles.statusContainer}>
+          {isListening && (
+            <View style={styles.statusItem}>
+              <View style={styles.listeningIndicator} />
+              <Text style={styles.statusText}>Listening...</Text>
+            </View>
+          )}
+          
+          {isSpeaking && (
+            <View style={styles.statusItem}>
+              <Volume2 size={16} color="#10B981" />
+              <Text style={[styles.statusText, { color: '#10B981' }]}>Speaking...</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.composerContainer}>
           <TouchableOpacity
-            style={[styles.voiceButton, (isListening || autoMode) && styles.voiceButtonActive]}
-            onPress={() => {
-              if (autoMode) {
-                setAutoMode(false);
-                stopListening();
-              } else {
-                setAutoMode(true);
-                startListening();
-              }
-            }}
+            style={[styles.autoToggle, autoMode && styles.autoToggleActive]}
+            onPress={handleToggleAutoMode}
           >
-            {(isListening || autoMode) ? (
-              <MicOff size={32} color="#FFFFFF" />
-            ) : (
-              <Mic size={32} color="#FFFFFF" />
-            )}
+            <Text style={[styles.autoToggleText, autoMode && styles.autoToggleTextActive]}>
+              Auto listen {autoMode ? 'on' : 'off'}
+            </Text>
           </TouchableOpacity>
 
-          <View style={styles.statusContainer}>
-            {isListening && (
-              <View style={styles.statusItem}>
-                <View style={styles.listeningIndicator} />
-                <Text style={styles.statusText}>Listening...</Text>
-              </View>
-            )}
-            
-            {isSpeaking && (
-              <View style={styles.statusItem}>
-                <Volume2 size={16} color="#10B981" />
-                <Text style={[styles.statusText, { color: '#10B981' }]}>Speaking...</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        <View style={styles.quickCommands}>
-          <Text style={styles.quickCommandsTitle}>Quick Commands:</Text>
-          <View style={styles.quickCommandList}>
-            {QUICK_COMMANDS.map((cmd) => (
-              <TouchableOpacity
-                key={cmd.label}
-                style={[
-                  styles.quickCommand,
-                  cmd.tone === 'positive' && styles.quickCommandPositive,
-                  cmd.tone === 'negative' && styles.quickCommandNegative,
-                ]}
-                onPress={() => handleVoiceCommand(cmd.phrase)}
+          <View style={styles.inputContainer}>
+            {suggestions.length > 0 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.suggestionRow}
               >
-                <Text style={styles.quickCommandText}>{cmd.label}</Text>
-              </TouchableOpacity>
-            ))}
+                {suggestions.map((cmd) => (
+                  <TouchableOpacity
+                    key={cmd.label}
+                    style={styles.suggestionChip}
+                    onPress={() => sendMessage(cmd.phrase)}
+                  >
+                    <Text style={styles.suggestionText}>{cmd.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+            <View style={styles.inputField}>
+              <TextInput
+                value={typedMessage}
+                onChangeText={handleTypedChange}
+                placeholder={suggestions.length ? 'Ask or tap a suggestion…' : 'Type your question or command...'}
+                placeholderTextColor="#6B7280"
+                style={styles.textInput}
+                multiline={false}
+                returnKeyType="send"
+                onSubmitEditing={() => submitTypedMessage()}
+                blurOnSubmit
+              />
+              <View style={styles.inlineButtons}>
+                <TouchableOpacity
+                  style={[styles.inlineIcon, isListening && styles.inlineIconActive]}
+                  onPress={() => {
+                    if (isListening) {
+                      stopListening();
+                      setAutoMode(false);
+                    } else {
+                      startListening();
+                    }
+                  }}
+                >
+                  {isListening ? <MicOff size={18} color="#F3F4F6" /> : <Mic size={18} color="#F3F4F6" />}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.inlineIcon, typedMessage.trim() ? styles.inlineIconConfirm : styles.inlineIconDisabled]}
+                  onPress={submitTypedMessage}
+                  disabled={!typedMessage.trim()}
+                >
+                  <Send size={18} color={typedMessage.trim() ? '#10B981' : '#6B7280'} />
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </View>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -480,16 +650,25 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#9CA3AF',
+    textAlign: 'center',
   },
   conversationContainer: {
     flex: 1,
     marginBottom: 20,
+  },
+  conversationContent: {
+    flexGrow: 1,
+    justifyContent: 'flex-end',
+    paddingBottom: 12,
   },
   messageContainer: {
     marginVertical: 8,
     padding: 12,
     borderRadius: 12,
     maxWidth: '80%',
+  },
+  keyboardContainer: {
+    width: '100%',
   },
   userMessage: {
     backgroundColor: '#3B82F6',
@@ -529,22 +708,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
   },
-  buttonContainer: {
-    alignItems: 'center',
-    gap: 16,
-  },
-  voiceButton: {
-    backgroundColor: '#3B82F6',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 4,
-  },
-  voiceButtonActive: {
-    backgroundColor: '#EF4444',
-  },
   statusContainer: {
     alignItems: 'center',
   },
@@ -563,18 +726,34 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#EF4444',
   },
-  quickCommands: {
-    gap: 12,
+  autoToggle: {
+    alignSelf: 'center',
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#374151',
+    backgroundColor: '#1F2937',
   },
-  quickCommandsTitle: {
-    color: '#FFFFFF',
-    fontSize: 16,
+  autoToggleActive: {
+    borderColor: '#10B981',
+    backgroundColor: 'rgba(16,185,129,0.12)',
+  },
+  autoToggleText: {
+    color: '#9CA3AF',
+    fontSize: 12,
     fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  quickCommandList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  autoToggleTextActive: {
+    color: '#10B981',
+  },
+  composerContainer: {
+    width: '100%',
+    gap: 12,
+    marginTop: 12,
   },
   quickCommand: {
     backgroundColor: '#374151',
@@ -582,18 +761,68 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 20,
   },
-  quickCommandPositive: {
-    backgroundColor: 'rgba(16,185,129,0.15)',
-    borderWidth: 1,
-    borderColor: '#10B981',
-  },
-  quickCommandNegative: {
-    backgroundColor: 'rgba(239,68,68,0.15)',
-    borderWidth: 1,
-    borderColor: '#EF4444',
-  },
   quickCommandText: {
     color: '#D1D5DB',
     fontSize: 14,
+  },
+  inputContainer: {
+    backgroundColor: '#1F2937',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#374151',
+    padding: 12,
+    gap: 10,
+  },
+  textInput: {
+    flex: 1,
+    color: '#F9FAFB',
+    fontSize: 16,
+    paddingVertical: 8,
+  },
+  inputField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    paddingHorizontal: 12,
+  },
+  inlineButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  inlineIcon: {
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(59,130,246,0.12)',
+  },
+  inlineIconActive: {
+    backgroundColor: 'rgba(239,68,68,0.18)',
+  },
+  inlineIconConfirm: {
+    backgroundColor: 'rgba(16,185,129,0.18)',
+  },
+  inlineIconDisabled: {
+    opacity: 0.4,
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 6,
+  },
+  suggestionChip: {
+    backgroundColor: 'rgba(59,130,246,0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#3B82F6',
+  },
+  suggestionText: {
+    color: '#93C5FD',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

@@ -1,21 +1,46 @@
-import { useEffect } from 'react';
-import { Stack, usePathname } from 'expo-router';
+import { useEffect, useMemo } from 'react';
+import { Stack, router, useRootNavigationState, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
+import { db } from '../services/database';
 
 export default function RootLayout() {
   useFrameworkReady();
-  const pathname = usePathname();
+  const rootNavigation = useRootNavigationState();
+  const segments = useSegments();
+
+  const publicRoutes = useMemo(() => new Set([
+    '/login',
+    '/pin-login',
+    '/biometric-login',
+    '/registration',
+    '/face-recognition',
+    '/admin-login',
+    '/splash',
+    '/+not-found',
+  ]), []);
+
+  useEffect(() => {
+    if (!rootNavigation?.key) return;
+    const routes = rootNavigation?.routes || [];
+    if (routes.length === 0) return;
+
+    const authed = !!db.getCurrentUser?.();
+    if (!segments?.length) return;
+
+    const top = segments[0];
+    const normalized = top === '(tabs)' ? '/(tabs)' : `/${top || ''}`;
+
+    if (!authed) {
+      if (!publicRoutes.has(normalized) && normalized !== '/login') {
+        setTimeout(() => router.replace('/login'), 0);
+      }
+    }
+  }, [segments, publicRoutes, rootNavigation?.key, rootNavigation?.routes]);
 
   useEffect(() => {
     console.log('[NafisaSmartHome] RootLayout mounted');
   }, []);
-
-  useEffect(() => {
-    if (pathname) {
-      console.log('[NafisaSmartHome] route change ->', pathname);
-    }
-  }, [pathname]);
 
   return (
     <>

@@ -1,28 +1,44 @@
-import React, { useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-let FaceDetector: any = null;
-try {
-  FaceDetector = require('expo-face-detector');
-} catch (e) {
-  FaceDetector = null;
-}
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, Platform } from 'react-native';
+import {
+  Camera as VisionCamera,
+  useCameraPermission,
+  useCameraDevice,
+  useFrameProcessor,
+} from 'react-native-vision-camera';
+import { runOnJS, useSharedValue } from 'react-native-reanimated';
+import { scanFaces } from 'vision-camera-face-detector';
 import { router } from 'expo-router';
-import { Camera, User, Save, CircleCheck as CheckCircle } from 'lucide-react-native';
+import { Camera as CameraIcon, User, Save, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { db } from '../services/database';
 import remoteApi from '../services/remote';
+import { buildTemplateFromFace, normalizeVisionFace, hashTemplateFromString } from '../utils/face-template';
+
+const INITIAL_STATUS = 'Press scan when you are ready';
 
 export default function RegistrationScreen() {
   const [step, setStep] = useState<'info' | 'capture' | 'success'>('info');
   const [userInfo, setUserInfo] = useState({ name: '', email: '' });
+  const [statusText, setStatusText] = useState(INITIAL_STATUS);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView>(null);
-  const [statusText, setStatusText] = useState('Press scan when you are ready');
   const [createdUser, setCreatedUser] = useState<any>(null);
 
+  const permission = useCameraPermission();
+  const device = useCameraDevice('front');
+  const scanning = useSharedValue(false);
+  const scanningRef = useRef(false);
+  const permissionRequestedRef = useRef(false);
+
+  useEffect(() => {
+    if (!permission.hasPermission && !permissionRequestedRef.current) {
+      permissionRequestedRef.current = true;
+      permission.requestPermission().catch(() => {});
+    }
+  }, [permission.hasPermission, permission]);
+
+  const isReady = useMemo(() => step !== 'capture' || (!!device && permission.hasPermission), [device, permission.hasPermission, step]);
+
   const handleInfoSubmit = () => {
-    console.log('[NafisaSmartHome] Registration info submit', userInfo);
     if (!userInfo.name.trim() || !userInfo.email.trim()) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
@@ -30,84 +46,42 @@ export default function RegistrationScreen() {
     setStep('capture');
   };
 
-  function hashString(s: string) {
-    let h = 5381; for (let i = 0; i < s.length; i++) { h = ((h << 5) + h) + s.charCodeAt(i); h |= 0; }
-    return (Math.abs(h)).toString(36);
-  }
+  const ensurePermission = useCallback(async () => {
+    if (permission.hasPermission) return true;
+    const granted = await permission.requestPermission();
+    return granted;
+  }, [permission]);
 
-  function buildTemplateFromFace(face: any) {
-    const bounds = face.bounds || face.boundingBox || {};
-    const origin = bounds.origin || { x: bounds.x || 0, y: bounds.y || 0 };
-    const size = bounds.size || { width: bounds.width || 1, height: bounds.height || 1 };
-    const w = size.width || 1; const h = size.height || 1;
-    const lm = face.landmarks || {};
-    const pick = (name: string) => {
-      const p = lm[name] || lm?.[name + 'Position'] || lm[name + 'Position'];
-      if (!p) return [0, 0];
-      const x = (p.x - origin.x) / w; const y = (p.y - origin.y) / h;
-      return [Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0];
-    };
-    const keys = ['leftEye','rightEye','noseBase','leftEar','rightEar','leftCheek','rightCheek','mouthLeft','mouthRight','bottomMouth'];
-    const pts = keys.map(k => pick(k)).flat();
-    // Derived simple features
-    const [lex,ley,rex,rey,nx,ny,lerx,lery,rerx,rery,lcx,lcy,rcx,rcy,mlx,mly,mrx,mry,bmx,bmy] = pts.concat(Array(20-pts.length).fill(0));
-    const eyeDist = Math.hypot(rex-lex, rey-ley);
-    const mouthWidth = Math.hypot(mrx-mlx, mry-mly);
-    const noseToMouth = Math.hypot(nx-((mlx+mrx)/2), ny-((mly+mry)/2));
-    const vec = [...pts, eyeDist, mouthWidth, noseToMouth];
-    return { vec, meta: { w, h } };
-  }
-
-  const handleCapture = async () => {
-    if (isCapturing) return;
-    if (!permission?.granted) {
-      const status = await requestPermission();
-      if (!status?.granted) {
-        Alert.alert('Camera', 'Camera access is required to scan faces.');
-        return;
+  const finishRegistration = useCallback(() => {
+    if (createdUser) {
+      db.currentUser = createdUser;
+    } else {
+      const registeredUser = db.getAllUsers().find(u => u.email === userInfo.email);
+      if (registeredUser) {
+        db.currentUser = registeredUser;
       }
     }
-    console.log('[NafisaSmartHome] Registration manual capture start');
+    router.replace('/(tabs)');
+  }, [createdUser, userInfo.email]);
+
+  const resetCaptureState = useCallback(() => {
+    scanning.value = false;
+    scanningRef.current = false;
+    setIsCapturing(false);
+  }, [scanning]);
+
+  const completeRegistration = useCallback(async (templateStr: string) => {
+    const faceId = 'fid_' + hashTemplateFromString(templateStr);
+
+    const duplicate = (db as any).matchFaceNoLogin?.(templateStr);
+    if (duplicate?.success && duplicate.user) {
+      Alert.alert('Already Registered', `${duplicate.user.name} is already registered on this device.`);
+      setStatusText(INITIAL_STATUS);
+      resetCaptureState();
+      return;
+    }
+
     try {
-      setIsCapturing(true);
-      setStatusText('Capturing...');
-      const cam = cameraRef.current;
-      if (!cam) { Alert.alert('Camera', 'Camera not ready'); return; }
-      const photo: any = await cam.takePictureAsync?.({ base64: true, quality: 0.85 });
-      const uri = photo?.uri;
-      if (!uri) throw new Error('No image');
-
-      let templateStr = '';
-      let faceId = '';
-      if (!FaceDetector) {
-        const b64: string = photo?.base64 || '';
-        templateStr = JSON.stringify({ hash: hashString(b64.slice(0, 1024)) });
-        faceId = 'fid_' + hashString(templateStr);
-      } else {
-        const options: any = {
-          mode: (FaceDetector as any).FaceDetectorMode?.accurate || 'accurate',
-          detectLandmarks: (FaceDetector as any).FaceDetectorLandmarks?.all || 'all',
-          runClassifications: (FaceDetector as any).FaceDetectorClassifications?.none || 'none',
-        };
-        const res: any = await (FaceDetector as any).detectFacesAsync(uri, options);
-        const faces: any[] = res?.faces || res || [];
-        if (faces.length !== 1) {
-          Alert.alert('Face Not Detected', faces.length > 1 ? 'Make sure only one person is in frame.' : 'Please align your face within the frame.');
-          setStatusText('Press scan when you are ready');
-          return;
-        }
-        const tpl = buildTemplateFromFace(faces[0]);
-        templateStr = JSON.stringify(tpl);
-        faceId = 'fid_' + hashString(templateStr);
-      }
-
-      const dup = (db as any).matchFaceNoLogin?.(templateStr);
-      if (dup?.success && dup.user) {
-        Alert.alert('Already Registered', `${dup.user.name} is already registered on this device.`);
-        setStatusText('Press scan when you are ready');
-        return;
-      }
-
       let result: any = { success: false };
       if (remoteApi.enabled) {
         result = await remoteApi.registerUser({ ...userInfo, faceId }, templateStr);
@@ -122,41 +96,91 @@ export default function RegistrationScreen() {
         setStep('success');
       } else if (result.duplicate && result.user) {
         Alert.alert('Already Registered', `${result.user.name} is already registered on this device.`);
-        setStatusText('Press scan when you are ready');
+        setStatusText(INITIAL_STATUS);
       } else {
         Alert.alert('Registration Failed', result?.error || 'Please try again');
-        setStatusText('Press scan when you are ready');
+        setStatusText(INITIAL_STATUS);
       }
-    } catch (e) {
+    } catch (error) {
       Alert.alert('Error', 'Could not capture face');
-      setStatusText('Press scan when you are ready');
+      setStatusText(INITIAL_STATUS);
     } finally {
-      setIsCapturing(false);
+      resetCaptureState();
     }
-  };
+  }, [resetCaptureState, userInfo, router]);
 
-  const finishRegistration = () => {
-    console.log('[NafisaSmartHome] Finish registration, navigate to tabs');
-    // Set current user and login
-    if (createdUser) {
-      db.currentUser = createdUser;
-    } else {
-      const registeredUser = db.getAllUsers().find(u => u.email === userInfo.email);
-      if (registeredUser) {
-        db.currentUser = registeredUser;
-      }
+  const handleDetectedFace = useCallback((face: any) => {
+    const normalized = normalizeVisionFace(face);
+    const templateStr = JSON.stringify(buildTemplateFromFace(normalized));
+    completeRegistration(templateStr);
+  }, [completeRegistration]);
+
+  const handleFaces = useCallback((faces: any[]) => {
+    if (!scanningRef.current) return;
+    if (!faces || faces.length === 0) {
+      return;
     }
-    
-    router.replace('/(tabs)');
-  };
+    if (faces.length !== 1) {
+      setStatusText(faces.length > 1 ? 'Only one face should be in frame.' : 'Align your face within the frame.');
+      return;
+    }
+    scanning.value = false;
+    scanningRef.current = false;
+    setStatusText('Processing face...');
+    handleDetectedFace(faces[0]);
+  }, [handleDetectedFace, scanning]);
+
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    if (!scanning.value) return;
+    const faces = scanFaces(frame);
+    if (faces && faces.length > 0) {
+      runOnJS(handleFaces)(faces);
+    }
+  }, [handleFaces]);
+
+  const handleCapture = useCallback(async () => {
+    if (isCapturing) return;
+    const granted = await ensurePermission();
+    if (!granted) {
+      Alert.alert('Camera', 'Camera access is required to scan faces.');
+      return;
+    }
+    if (!device) {
+      Alert.alert('Camera', 'Camera not ready yet.');
+      return;
+    }
+    setStatusText('Hold still and look straight at the camera.');
+    setIsCapturing(true);
+    scanningRef.current = true;
+    scanning.value = true;
+  }, [device, ensurePermission, isCapturing, scanning]);
 
   const goBack = () => {
     if (step === 'capture') {
       setStep('info');
+      setStatusText(INITIAL_STATUS);
+      resetCaptureState();
     } else {
       router.back();
     }
   };
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.loadingText}>Face registration is available on iOS and Android devices.</Text>
+      </View>
+    );
+  }
+
+  if (!isReady) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.loadingText}>Loading camera...</Text>
+      </View>
+    );
+  }
 
   if (step === 'info') {
     return (
@@ -172,9 +196,9 @@ export default function RegistrationScreen() {
           <View style={styles.iconContainer}>
             <User size={64} color="#3B82F6" />
           </View>
-          
+
           <Text style={styles.subtitle}>Let's set up your account</Text>
-          
+
           <View style={styles.inputContainer}>
             <Text style={styles.inputLabel}>Full Name</Text>
             <TextInput
@@ -185,7 +209,7 @@ export default function RegistrationScreen() {
               onChangeText={(text) => setUserInfo(prev => ({ ...prev, name: text }))}
             />
           </View>
-          
+
           <View style={styles.inputContainer}>
             <Text style={styles.inputLabel}>Email Address</Text>
             <TextInput
@@ -198,66 +222,39 @@ export default function RegistrationScreen() {
               onChangeText={(text) => setUserInfo(prev => ({ ...prev, email: text }))}
             />
           </View>
-          
-          <TouchableOpacity style={styles.nextButton} onPress={handleInfoSubmit}>
-            <Camera size={24} color="#FFFFFF" />
-            <Text style={styles.nextButtonText}>Continue to Face Capture</Text>
+
+          <TouchableOpacity style={styles.primaryButton} onPress={handleInfoSubmit}>
+            <Text style={styles.primaryButtonText}>Continue</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  if (step === 'success') {
-    return (
-      <View style={styles.container}>
-        <View style={styles.successContainer}>
-          <View style={styles.successIcon}>
-            <CheckCircle size={64} color="#10B981" />
-          </View>
-          
-          <Text style={styles.successTitle}>Registration Complete!</Text>
-          <Text style={styles.successSubtitle}>
-            Your account has been successfully created. You can now access your smart home.
-          </Text>
-          
-          <View style={styles.userInfoDisplay}>
-            <Text style={styles.userInfoLabel}>Registered User:</Text>
-            <Text style={styles.userInfoText}>{userInfo.name}</Text>
-            <Text style={styles.userInfoEmail}>{userInfo.email}</Text>
-          </View>
-          
-          <TouchableOpacity style={styles.finishButton} onPress={finishRegistration}>
-            <Text style={styles.finishButtonText}>Start Using App</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // Capture step - Front camera preview with capture
   if (step === 'capture') {
-    if (!permission) {
+    if (!permission.hasPermission) {
       return (
         <View style={styles.container}>
-          <Text style={styles.loadingText}>Loading camera...</Text>
-        </View>
-      );
-    }
-    if (!permission.granted) {
-      return (
-        <View style={styles.container}>
+          <View style={styles.header}>
+            <TouchableOpacity style={styles.backButton} onPress={goBack}>
+              <Text style={styles.backButtonText}>← Back</Text>
+            </TouchableOpacity>
+            <Text style={styles.title}>Face Capture</Text>
+          </View>
           <View style={styles.permissionContainer}>
-            <Camera size={64} color="#3B82F6" />
+            <CameraIcon size={64} color="#3B82F6" />
             <Text style={styles.title}>Camera Access Required</Text>
-            <Text style={styles.subtitle}>We need the front camera to capture your face.</Text>
-            <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
-              <Text style={styles.permissionButtonText}>Grant Camera Access</Text>
+            <Text style={styles.subtitle}>
+              We need camera access to enroll your face for authentication
+            </Text>
+            <TouchableOpacity style={styles.primaryButton} onPress={permission.requestPermission}>
+              <Text style={styles.primaryButtonText}>Grant Camera Access</Text>
             </TouchableOpacity>
           </View>
         </View>
       );
     }
+
     return (
       <View style={styles.container}>
         <View style={styles.header}>
@@ -268,236 +265,212 @@ export default function RegistrationScreen() {
         </View>
 
         <View style={styles.cameraContainer}>
-          <CameraView ref={cameraRef} style={styles.camera} facing="front" photo />
+          <VisionCamera
+            style={styles.camera}
+            device={device!}
+            isActive
+            frameProcessor={frameProcessor}
+          />
           <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.overlay]}>
-            <View style={[styles.faceFrame, isCapturing && styles.faceFrameCapturing]} />
-            <View style={styles.capturingIndicator}>
-              <Text style={styles.capturingText}>{isCapturing ? 'Capturing…' : statusText}</Text>
+            <View style={[styles.faceFrame,
+              isCapturing && styles.faceFrameActive,
+            ]} />
+
+            <View style={styles.scanningIndicator}>
+              <Text style={styles.scanningText}>{isCapturing ? 'Scanning…' : statusText}</Text>
             </View>
           </View>
         </View>
 
         <View style={styles.controls}>
-          <Text style={styles.instructions}>
-            Align your face within the frame, then tap Scan to capture.
-          </Text>
-          <TouchableOpacity 
-            style={[styles.captureButton, isCapturing && styles.captureButtonDisabled]} 
+          <TouchableOpacity
+            style={[styles.primaryButton, isCapturing && styles.primaryButtonDisabled]}
             onPress={handleCapture}
             disabled={isCapturing}
           >
-            <Camera size={32} color="#FFFFFF" />
-            <Text style={styles.captureButtonText}>{isCapturing ? 'Capturing…' : 'Scan Face'}</Text>
+            <Text style={styles.primaryButtonText}>{isCapturing ? 'Scanning…' : 'Scan Face'}</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  // Fallback (should not reach)
-  return null;
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backButton} onPress={goBack}>
+          <Text style={styles.backButtonText}>← Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.title}>Registration Complete</Text>
+      </View>
+
+      <View style={styles.successContainer}>
+        <CheckCircle size={64} color="#10B981" />
+        <Text style={styles.successTitle}>Welcome, {createdUser?.name || userInfo.name}!</Text>
+        <Text style={styles.successSubtitle}>We saved your face scan for quick login.</Text>
+        <TouchableOpacity style={styles.primaryButton} onPress={finishRegistration}>
+          <Text style={styles.primaryButtonText}>Go to Dashboard</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#111827',
+    backgroundColor: '#0F172A',
+    padding: 20,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
-    paddingTop: 60,
+    marginBottom: 16,
   },
   backButton: {
-    marginRight: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(148, 163, 184, 0.15)',
+    borderRadius: 10,
+    marginRight: 12,
   },
   backButtonText: {
-    color: '#3B82F6',
-    fontSize: 16,
+    color: '#E5E7EB',
+    fontWeight: '600',
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#9CA3AF',
-    textAlign: 'center',
-    marginBottom: 32,
-    lineHeight: 22,
+    color: '#F9FAFB',
+    fontSize: 22,
+    fontWeight: '700',
   },
   infoForm: {
-    flex: 1,
-    padding: 32,
-    justifyContent: 'center',
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    gap: 16,
   },
   iconContainer: {
-    alignItems: 'center',
-    marginBottom: 24,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(37, 99, 235, 0.2)',
+    padding: 18,
+    borderRadius: 14,
+  },
+  subtitle: {
+    color: '#94A3B8',
+    fontSize: 15,
+    textAlign: 'center',
   },
   inputContainer: {
-    marginBottom: 20,
+    gap: 6,
   },
   inputLabel: {
-    color: '#FFFFFF',
-    fontSize: 16,
+    color: '#E2E8F0',
+    fontSize: 14,
     fontWeight: '600',
-    marginBottom: 8,
   },
   input: {
-    backgroundColor: '#1F2937',
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 8,
-    padding: 16,
-    color: '#FFFFFF',
+    borderColor: '#1F2937',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: '#F9FAFB',
     fontSize: 16,
   },
-  nextButton: {
-    backgroundColor: '#3B82F6',
-    flexDirection: 'row',
+  primaryButton: {
+    backgroundColor: '#2563EB',
+    paddingVertical: 14,
+    borderRadius: 14,
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginTop: 32,
-    gap: 12,
   },
-  nextButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
+  primaryButtonDisabled: {
+    backgroundColor: 'rgba(37, 99, 235, 0.5)',
+  },
+  primaryButtonText: {
+    color: '#F9FAFB',
+    fontSize: 16,
     fontWeight: '600',
   },
   cameraContainer: {
     flex: 1,
-    margin: 20,
     borderRadius: 20,
     overflow: 'hidden',
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1F2937',
   },
-  mockCamera: {
+  camera: {
     flex: 1,
-    backgroundColor: '#374151',
   },
-  camera: { flex: 1 },
-  loadingText: { color: '#FFFFFF', fontSize: 18, textAlign: 'center', marginTop: 100 },
-  permissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
-  permissionButton: { backgroundColor: '#3B82F6', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
-  permissionButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   overlay: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 24,
   },
   faceFrame: {
-    width: 250,
-    height: 300,
-    borderWidth: 3,
-    borderColor: '#3B82F6',
-    borderRadius: 150,
-    borderStyle: 'dashed',
-  },
-  faceFrameCapturing: {
-    borderColor: '#10B981',
-    borderStyle: 'solid',
-  },
-  capturingIndicator: {
-    position: 'absolute',
-    bottom: 100,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    width: '70%',
+    aspectRatio: 3 / 4,
     borderRadius: 20,
+    borderWidth: 2,
+    borderColor: 'rgba(59, 130, 246, 0.4)',
+    backgroundColor: 'transparent',
   },
-  capturingText: {
-    color: '#10B981',
+  faceFrameActive: {
+    borderColor: '#3B82F6',
+  },
+  scanningIndicator: {
+    position: 'absolute',
+    bottom: 32,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  scanningText: {
+    color: '#E5E7EB',
     fontSize: 16,
     fontWeight: '600',
   },
   controls: {
-    padding: 20,
+    marginTop: 16,
+  },
+  permissionContainer: {
+    flex: 1,
     alignItems: 'center',
-  },
-  instructions: {
-    color: '#9CA3AF',
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  captureButton: {
-    backgroundColor: '#10B981',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderRadius: 12,
-    gap: 12,
-  },
-  captureButtonDisabled: {
-    backgroundColor: '#6B7280',
-  },
-  captureButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
+    justifyContent: 'center',
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    padding: 24,
+    gap: 16,
   },
   successContainer: {
     flex: 1,
-    padding: 32,
-    justifyContent: 'center',
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#1F2937',
     alignItems: 'center',
-  },
-  successIcon: {
-    marginBottom: 24,
+    justifyContent: 'center',
+    gap: 16,
+    padding: 24,
   },
   successTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 12,
-    textAlign: 'center',
+    color: '#F9FAFB',
+    fontSize: 22,
+    fontWeight: '700',
   },
   successSubtitle: {
-    fontSize: 16,
-    color: '#9CA3AF',
+    color: '#94A3B8',
+    fontSize: 15,
     textAlign: 'center',
-    marginBottom: 32,
-    lineHeight: 22,
   },
-  userInfoDisplay: {
-    backgroundColor: '#1F2937',
-    padding: 20,
-    borderRadius: 12,
-    marginBottom: 32,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  userInfoLabel: {
-    color: '#9CA3AF',
-    fontSize: 14,
-    marginBottom: 8,
-  },
-  userInfoText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  userInfoEmail: {
-    color: '#3B82F6',
+  loadingText: {
+    color: '#E5E7EB',
     fontSize: 16,
-  },
-  finishButton: {
-    backgroundColor: '#3B82F6',
-    paddingHorizontal: 32,
-    paddingVertical: 16,
-    borderRadius: 12,
-  },
-  finishButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
+    textAlign: 'center',
   },
 });

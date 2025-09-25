@@ -16,8 +16,10 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "This app uses speech recognition to control your smart home.",
-        "NSMicrophoneUsageDescription": "This app uses the microphone to listen for your voice commands."
-      }
+        "NSMicrophoneUsageDescription": "This app uses the microphone to listen for your voice commands.",
+        "NSCameraUsageDescription": "Camera access is required for face recognition during login and registration."
+      },
+      "bundleIdentifier": "com.anonymous.fawzinoiot"
     },
     "android": {
       "adaptiveIcon": {
@@ -25,6 +27,7 @@
         "backgroundColor": "#111827"
       },
       "permissions": [
+        "android.permission.CAMERA",
         "android.permission.USE_BIOMETRIC",
         "android.permission.USE_FINGERPRINT",
         "android.permission.RECORD_AUDIO"
@@ -41,6 +44,8 @@
       "expo-font",
       "expo-local-authentication",
       "expo-secure-store",
+      "expo-speech-recognition",
+      "react-native-vision-camera",
       [
         "expo-build-properties",
         {

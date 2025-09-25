@@ -1,12 +1,16 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Speech from 'expo-speech';
-let Voice;
+
+let ExpoSpeechRecognitionModule;
+let addSpeechRecognitionListener;
 try {
-  // Optional: available only in dev client/native builds
-  Voice = require('@react-native-voice/voice').default;
-} catch (e) {
-  Voice = undefined;
+  const speechRecognition = require('expo-speech-recognition');
+  ExpoSpeechRecognitionModule = speechRecognition?.ExpoSpeechRecognitionModule;
+  addSpeechRecognitionListener = speechRecognition?.addSpeechRecognitionListener;
+} catch (error) {
+  ExpoSpeechRecognitionModule = undefined;
+  addSpeechRecognitionListener = undefined;
 }
 
 class VoiceService {
@@ -16,6 +20,11 @@ class VoiceService {
     this.recognition = null; // web
     this.sttAvailable = false;
     this.isExpoGo = (Constants?.appOwnership === 'expo');
+    this.expoRecognition = null;
+    this.expoSubscriptions = [];
+    this.handleExpoResult = this.handleExpoResult.bind(this);
+    this.handleExpoError = this.handleExpoError.bind(this);
+    this.handleExpoSpeechEnd = this.handleExpoSpeechEnd.bind(this);
     this.initializeServices();
   }
 
@@ -31,10 +40,10 @@ class VoiceService {
       }
     }
 
-    if (!this.isExpoGo && Voice && typeof Voice.start === 'function') {
-      this.sttAvailable = true;
-      Voice.onSpeechError = this.onSpeechError.bind(this);
-      Voice.onSpeechResults = this.onSpeechResults.bind(this);
+    if (ExpoSpeechRecognitionModule && typeof addSpeechRecognitionListener === 'function') {
+      this.setupExpoSpeechRecognition().catch((error) => {
+        console.warn('[voice] expo speech recognition unavailable', error?.message || error);
+      });
     }
   }
 
@@ -55,6 +64,57 @@ class VoiceService {
     }
   }
 
+  async setupExpoSpeechRecognition() {
+    if (this.expoRecognition || !ExpoSpeechRecognitionModule?.requestPermissionsAsync) {
+      return;
+    }
+    if (typeof addSpeechRecognitionListener !== 'function') {
+      return;
+    }
+    try {
+      const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!permission?.granted) {
+        return;
+      }
+      this.expoRecognition = ExpoSpeechRecognitionModule;
+      this.sttAvailable = true;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  handleExpoResult(event) {
+    if (!event || !event.results || !event.results.length) return;
+    const transcript = event.results[0]?.transcript || '';
+    const confidence = event.results[0]?.confidence ?? 1;
+    if (event.isFinal) {
+      this.isListening = false;
+      if (this.resolvePromise && transcript) {
+        this.resolvePromise({ transcript, confidence });
+      } else if (this.rejectPromise) {
+        this.rejectPromise(new Error('No speech recognized.'));
+      }
+      this.clearExpoCallbacks();
+    }
+  }
+
+  handleExpoError(event) {
+    const message = event?.message || 'Speech recognition failed';
+    if (this.rejectPromise) this.rejectPromise(new Error(message));
+    this.clearExpoCallbacks();
+    this.isListening = false;
+  }
+
+  handleExpoSpeechEnd() {
+    this.isListening = false;
+    this.clearExpoCallbacks();
+  }
+
+  clearExpoCallbacks() {
+    this.resolvePromise = null;
+    this.rejectPromise = null;
+  }
+
   async startListening() {
     return new Promise((resolve, reject) => {
       this.resolvePromise = resolve;
@@ -73,8 +133,28 @@ class VoiceService {
           };
           this.recognition.onend = () => { this.isListening = false; };
           this.recognition.start();
-        } else if (!this.isExpoGo && Voice && typeof Voice.start === 'function') {
-          Voice.start('en-US');
+        } else if (this.expoRecognition) {
+          if (typeof addSpeechRecognitionListener === 'function') {
+            this.expoSubscriptions.push(
+              addSpeechRecognitionListener('result', this.handleExpoResult),
+              addSpeechRecognitionListener('error', this.handleExpoError),
+              addSpeechRecognitionListener('speechend', this.handleExpoSpeechEnd),
+              addSpeechRecognitionListener('nomatch', this.handleExpoSpeechEnd)
+            );
+          }
+          try {
+            const startResult = this.expoRecognition.start({ lang: 'en-US', interimResults: false, addsPunctuation: true });
+            if (startResult && typeof startResult.then === 'function') {
+              startResult.catch((error) => {
+                this.isListening = false;
+                if (this.rejectPromise) this.rejectPromise(error instanceof Error ? error : new Error(String(error)));
+              });
+            }
+          } catch (error) {
+            console.warn('[voice] expo speech start failed', error?.message || error);
+            this.isListening = false;
+            reject(error);
+          }
         } else {
           this.isListening = false;
           reject(new Error('Speech recognition not available in Expo Go. Use dev client or web.'));
@@ -91,7 +171,7 @@ class VoiceService {
     this.isListening = false;
     try {
       if (this.recognition) this.recognition.stop();
-      else if (!this.isExpoGo && Voice && typeof Voice.stop === 'function') await Voice.stop();
+      else if (this.expoRecognition && typeof this.expoRecognition.stop === 'function') this.expoRecognition.stop();
     } catch (e) {
       console.error('Failed to stop speech recognition', e);
     }
@@ -132,8 +212,22 @@ class VoiceService {
   }
 
   destroy() {
-    if (!this.isExpoGo && Voice && typeof Voice.destroy === 'function') {
-      Voice.destroy().then(Voice.removeAllListeners);
+    if (this.expoRecognition) {
+      try {
+        this.expoRecognition.abort();
+      } catch (e) {
+        console.error('Failed to abort speech recognition', e);
+      }
+    }
+    if (this.expoSubscriptions.length) {
+      this.expoSubscriptions.forEach((sub) => {
+        try {
+          sub.remove();
+        } catch (e) {
+          console.error('Failed to remove subscription', e);
+        }
+      });
+      this.expoSubscriptions = [];
     }
   }
 

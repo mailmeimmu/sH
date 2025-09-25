@@ -1,20 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import type { ReactNode } from 'react';
 import { router } from 'expo-router';
 import { Chrome as Home, Lightbulb, Fan, Thermometer, Zap, ArrowLeft, Mic } from 'lucide-react-native';
 import { voiceService } from '../services/voice';
 import { db } from '../services/database';
 import theme from '../theme';
 
+type MainhallDevices = { lightA: boolean; lightB: boolean; fan: boolean; ac: boolean };
+type BedroomDevices = { light: boolean; fan: boolean; ac: boolean };
+type KitchenDevices = { light: boolean };
+
+type HomeDevices = {
+  mainhall: MainhallDevices;
+  bedroom1: BedroomDevices;
+  bedroom2: BedroomDevices;
+  kitchen: KitchenDevices;
+};
+
+type RoomKey = keyof HomeDevices;
+
+type DeviceRecord = Record<string, boolean>;
+
+const initialDevices: HomeDevices = {
+  mainhall: { lightA: false, lightB: false, fan: false, ac: false },
+  bedroom1: { light: false, fan: false, ac: false },
+  bedroom2: { light: false, fan: false, ac: false },
+  kitchen: { light: false },
+};
+
 let welcomeSpoken = false;
 
 export default function HomeControlScreen() {
-  const [devices, setDevices] = useState({
-    mainhall: { lightA: false, lightB: false, fan: false, ac: false },
-    bedroom1: { light: false, fan: false, ac: false },
-    bedroom2: { light: false, fan: false, ac: false },
-    kitchen: { light: false },
-  });
+  const [devices, setDevices] = useState<HomeDevices>(initialDevices);
 
   useEffect(() => {
     if (db.can('voice.use') && !welcomeSpoken) {
@@ -33,14 +51,12 @@ export default function HomeControlScreen() {
     }
   });
 
-  const toggleDevice = (room: string, device: string) => {
-    setDevices(prev => ({
-      ...prev,
-      [room]: {
-        ...prev[room],
-        [device]: !prev[room][device],
-      },
-    }));
+  const toggleDevice = (room: RoomKey, device: string) => {
+    setDevices(prev => {
+      const roomState = prev[room] as DeviceRecord;
+      const nextRoom = { ...roomState, [device]: !roomState[device] } as HomeDevices[RoomKey];
+      return { ...prev, [room]: nextRoom } as HomeDevices;
+    });
   };
 
   const handleVoiceControl = () => {
@@ -81,7 +97,7 @@ export default function HomeControlScreen() {
           title="Main Hall" 
           icon={<Home size={20} color="#3B82F6" />}
           devices={devices.mainhall} 
-          onToggle={(device) => toggleDevice('mainhall', device)}
+          onToggle={(device: string) => toggleDevice('mainhall', device)}
           powerUsage={powerUsage.rooms.mainhall}
           variant="mainhall"
         />
@@ -90,23 +106,25 @@ export default function HomeControlScreen() {
           title="Bedroom 1" 
           icon={<Home size={20} color="#3B82F6" />}
           devices={devices.bedroom1} 
-          onToggle={(device) => toggleDevice('bedroom1', device)}
+          onToggle={(device: string) => toggleDevice('bedroom1', device)}
           powerUsage={powerUsage.rooms.bedroom1}
+          variant="bedroom"
         />
         
         <DeviceRoom 
           title="Bedroom 2" 
           icon={<Home size={20} color="#3B82F6" />}
           devices={devices.bedroom2} 
-          onToggle={(device) => toggleDevice('bedroom2', device)}
+          onToggle={(device: string) => toggleDevice('bedroom2', device)}
           powerUsage={powerUsage.rooms.bedroom2}
+          variant="bedroom"
         />
         
         <DeviceRoom 
           title="Kitchen" 
           icon={<Home size={20} color="#3B82F6" />}
           devices={devices.kitchen} 
-          onToggle={(device) => toggleDevice('kitchen', device)}
+          onToggle={(device: string) => toggleDevice('kitchen', device)}
           powerUsage={powerUsage.rooms.kitchen}
           variant="kitchen"
         />
@@ -115,7 +133,16 @@ export default function HomeControlScreen() {
   );
 }
 
-function DeviceRoom({ title, icon, devices, onToggle, powerUsage, variant }: any) {
+interface DeviceRoomProps {
+  title: string;
+  icon: ReactNode;
+  devices: DeviceRecord;
+  onToggle: (device: string) => void;
+  powerUsage: number;
+  variant?: 'mainhall' | 'kitchen' | 'bedroom';
+}
+
+function DeviceRoom({ title, icon, devices, onToggle, powerUsage, variant = 'bedroom' }: DeviceRoomProps) {
   return (
     <View style={styles.roomContainer}>
       <View style={styles.roomHeader}>
@@ -188,7 +215,14 @@ function DeviceRoom({ title, icon, devices, onToggle, powerUsage, variant }: any
   );
 }
 
-function DeviceButton({ name, icon, isOn, onPress }: any) {
+interface DeviceButtonProps {
+  name: string;
+  icon: ReactNode;
+  isOn: boolean;
+  onPress: () => void;
+}
+
+function DeviceButton({ name, icon, isOn, onPress }: DeviceButtonProps) {
   return (
     <TouchableOpacity 
       style={[styles.deviceButton, isOn && styles.deviceButtonOn]} 

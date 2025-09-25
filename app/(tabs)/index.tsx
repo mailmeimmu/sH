@@ -246,9 +246,16 @@ export default function HomeControlScreen() {
     }));
   }, [updateDeviceState]);
 
+  const setDevicesForAllZones = useCallback(async (type: DeviceType, value: 'on' | 'off') => {
+    for (const zone of DEVICE_ZONES) {
+      await setDevicesForZone(zone.id, type, value);
+    }
+  }, [setDevicesForZone]);
+
   const mapRoom = (room?: string) => {
     if (!room) return 'main-hall';
     const value = room.toLowerCase();
+    if (value.includes('all') || value.includes('everywhere') || value.includes('whole') || value.includes('entire')) return 'all';
     if (value.includes('kitchen')) return 'kitchen';
     if (value.includes('bedroom 2') || value.includes('room 2') || value.includes('second bedroom')) return 'bedroom-2';
     if (value.includes('bedroom 1') || value.includes('room 1') || value.includes('first bedroom') || value.includes('bedroom')) return 'bedroom-1';
@@ -264,8 +271,13 @@ export default function HomeControlScreen() {
         const zoneId = mapRoom(reply.room);
         const type = (reply.device || 'light').toLowerCase() as DeviceType;
         const value = (reply.value || 'on').toLowerCase();
-        await setDevicesForZone(zoneId, type, value === 'off' ? 'off' : 'on');
-        await voiceService.speak(reply.say || `Turning ${value} ${type} in ${ZONE_LOOKUP[zoneId]?.title || 'home'}`);
+        if (zoneId === 'all') {
+          await setDevicesForAllZones(type, value === 'off' ? 'off' : 'on');
+          await voiceService.speak(reply.say || `Turning ${value} all ${type}s.`);
+        } else {
+          await setDevicesForZone(zoneId, type, value === 'off' ? 'off' : 'on');
+          await voiceService.speak(reply.say || `Turning ${value} ${type} in ${ZONE_LOOKUP[zoneId]?.title || 'home'}`);
+        }
       } else if (reply.action?.startsWith('door.')) {
         const door = (reply.door || 'mainhall').toLowerCase();
         switch (reply.action) {

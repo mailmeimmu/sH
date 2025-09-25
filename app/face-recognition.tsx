@@ -1,90 +1,58 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
-let FaceDetector: any = null;
-try {
-  // Optional native module; requires a Dev Client or EAS build
-  FaceDetector = require('expo-face-detector');
-} catch (e) {
-  FaceDetector = null;
-}
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform } from 'react-native';
+import {
+  Camera as VisionCamera,
+  useCameraPermission,
+  useCameraDevice,
+  useFrameProcessor,
+} from 'react-native-vision-camera';
+import { runOnJS, useSharedValue } from 'react-native-reanimated';
+import { scanFaces } from 'vision-camera-face-detector';
 import { router } from 'expo-router';
-import { Camera, RotateCcw, CircleCheck as CheckCircle } from 'lucide-react-native';
+import { Camera as CameraIcon, RotateCcw, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { db } from '../services/database';
 import remoteApi from '../services/remote';
 import * as SecureStore from 'expo-secure-store';
+import { buildTemplateFromFace, normalizeVisionFace } from '../utils/face-template';
+
+const FACE_STATUS_IDLE = 'Tap scan when you are ready';
 
 export default function FaceRecognitionScreen() {
-  const [facing, setFacing] = useState<CameraType>('front');
-  const [permission, requestPermission] = useCameraPermissions();
+  const [facing, setFacing] = useState<'front' | 'back'>('front');
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<'success' | 'failed' | null>(null);
   const [recognizedUser, setRecognizedUser] = useState<any>(null);
-  const [statusText, setStatusText] = useState('Tap scan when you are ready');
-  const cameraRef = useRef<CameraView>(null);
+  const [statusText, setStatusText] = useState(FACE_STATUS_IDLE);
 
-  function buildTemplateFromFace(face: any) {
-    const bounds = face.bounds || face.boundingBox || {};
-    const origin = bounds.origin || { x: bounds.x || 0, y: bounds.y || 0 };
-    const size = bounds.size || { width: bounds.width || 1, height: bounds.height || 1 };
-    const w = size.width || 1; const h = size.height || 1;
-    const lm = face.landmarks || {};
-    const pick = (name: string) => {
-      const p = lm[name] || lm?.[name + 'Position'] || lm[name + 'Position'];
-      if (!p) return [0, 0];
-      const x = (p.x - origin.x) / w; const y = (p.y - origin.y) / h;
-      return [Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0];
-    };
-    const keys = ['leftEye','rightEye','noseBase','leftEar','rightEar','leftCheek','rightCheek','mouthLeft','mouthRight','bottomMouth'];
-    const pts = keys.map(k => pick(k)).flat();
-    const [lex,ley,rex,rey,nx,ny,lerx,lery,rerx,rery,lcx,lcy,rcx,rcy,mlx,mly,mrx,mry,bmx,bmy] = pts.concat(Array(20-pts.length).fill(0));
-    const eyeDist = Math.hypot(rex-lex, rey-ley);
-    const mouthWidth = Math.hypot(mrx-mlx, mry-mly);
-    const noseToMouth = Math.hypot(nx-((mlx+mrx)/2), ny-((mly+mry)/2));
-    const vec = [...pts, eyeDist, mouthWidth, noseToMouth];
-    return { vec, meta: { w, h } };
-  }
+  const permission = useCameraPermission();
+  const device = useCameraDevice(facing);
+  const scanning = useSharedValue(false);
+  const scanningRef = useRef(false);
+  const permissionRequestedRef = useRef(false);
 
-  const attemptMatch = async () => {
-    if (isScanning) return;
-    if (!permission?.granted) {
-      const status = await requestPermission();
-      if (!status?.granted) {
-        Alert.alert('Camera', 'Camera access is required for face login.');
-        return;
-      }
+  const isReady = useMemo(() => !!device && permission.hasPermission, [device, permission.hasPermission]);
+
+  useEffect(() => {
+    if (!permission.hasPermission && !permissionRequestedRef.current) {
+      permissionRequestedRef.current = true;
+      permission.requestPermission().catch(() => {});
     }
+  }, [permission.hasPermission, permission]);
+
+  const ensurePermission = useCallback(async () => {
+    if (permission.hasPermission) return true;
+    const granted = await permission.requestPermission();
+    return granted;
+  }, [permission]);
+
+  const resetScanState = useCallback(() => {
+    scanning.value = false;
+    scanningRef.current = false;
+    setIsScanning(false);
+  }, [scanning]);
+
+  const processMatchResult = useCallback(async (templateStr: string) => {
     try {
-      setIsScanning(true);
-      setStatusText('Scanning...');
-      const cam = cameraRef.current;
-      if (!cam) { Alert.alert('Camera', 'Camera not ready'); return; }
-      const photo: any = await cam.takePictureAsync?.({ quality: 0.85, base64: true });
-      const uri = photo?.uri;
-      if (!uri) throw new Error('No image');
-
-      let templateStr = '';
-      if (FaceDetector) {
-        const options: any = {
-          mode: (FaceDetector as any).FaceDetectorMode?.accurate || 'accurate',
-          detectLandmarks: (FaceDetector as any).FaceDetectorLandmarks?.all || 'all',
-          runClassifications: (FaceDetector as any).FaceDetectorClassifications?.none || 'none',
-        };
-        const res: any = await (FaceDetector as any).detectFacesAsync(uri, options);
-        const faces: any[] = res?.faces || res || [];
-        if (faces.length !== 1) {
-          Alert.alert('Face Not Detected', faces.length > 1 ? 'Only one face should be in the frame.' : 'Please align your face and try again.');
-          setStatusText('Tap scan when you are ready');
-          return;
-        }
-        const tpl = buildTemplateFromFace(faces[0]);
-        templateStr = JSON.stringify(tpl);
-      } else {
-        const hashString = (s: string) => { let h = 5381; for (let i = 0; i < s.length; i++) { h = ((h << 5) + h) + s.charCodeAt(i); h |= 0; } return (Math.abs(h)).toString(36); };
-        const b64: string = photo?.base64 || '';
-        templateStr = JSON.stringify({ hash: hashString(b64.slice(0, 1024)) });
-      }
-
       let result: any = { success: false };
       if (remoteApi.enabled) {
         result = await remoteApi.authByFace(templateStr);
@@ -103,38 +71,85 @@ export default function FaceRecognitionScreen() {
       } else {
         setScanResult('failed');
         setStatusText('Face not recognized. Try again.');
-        setTimeout(() => setStatusText('Tap scan when you are ready'), 1500);
+        setTimeout(() => setStatusText(FACE_STATUS_IDLE), 1500);
       }
-    } catch (e) {
-      console.log('[NafisaSmartHome] Face scan error', e);
+    } catch (error) {
+      console.log('[NafisaSmartHome] Face match error', error);
       setScanResult('failed');
       setStatusText('Unable to scan. Try again.');
-      setTimeout(() => setStatusText('Tap scan when you are ready'), 1500);
+      setTimeout(() => setStatusText(FACE_STATUS_IDLE), 1500);
     } finally {
-      setIsScanning(false);
+      resetScanState();
     }
-  };
+  }, [resetScanState]);
 
-  if (!permission) {
-    console.log('[NafisaSmartHome] Camera permission loading');
+  const handleDetectedFace = useCallback((face: any) => {
+    const normalized = normalizeVisionFace(face);
+    const templateStr = JSON.stringify(buildTemplateFromFace(normalized));
+    processMatchResult(templateStr);
+  }, [processMatchResult]);
+
+  const handleFaces = useCallback((faces: any[]) => {
+    if (!scanningRef.current) return;
+    if (!faces || faces.length === 0) {
+      return;
+    }
+    if (faces.length !== 1) {
+      setStatusText(faces.length > 1 ? 'Only one face should be in frame.' : 'Align your face within the frame.');
+      return;
+    }
+    scanning.value = false;
+    scanningRef.current = false;
+    setStatusText('Processing face...');
+    handleDetectedFace(faces[0]);
+  }, [handleDetectedFace, scanning]);
+
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    if (!scanning.value) return;
+    const faces = scanFaces(frame);
+    if (faces && faces.length > 0) {
+      runOnJS(handleFaces)(faces);
+    }
+  }, [handleFaces]);
+
+  const attemptMatch = useCallback(async () => {
+    if (isScanning) return;
+    const granted = await ensurePermission();
+    if (!granted) {
+      Alert.alert('Camera', 'Camera access is required for face recognition.');
+      return;
+    }
+    if (!device) {
+      Alert.alert('Camera', 'Camera not ready yet.');
+      return;
+    }
+    setRecognizedUser(null);
+    setScanResult(null);
+    setStatusText('Hold still and look at the camera.');
+    setIsScanning(true);
+    scanningRef.current = true;
+    scanning.value = true;
+  }, [device, ensurePermission, isScanning, scanning]);
+
+  if (Platform.OS === 'web') {
     return (
       <View style={styles.container}>
-        <Text style={styles.loadingText}>Loading camera...</Text>
+        <Text style={styles.loadingText}>Face recognition is available on iOS and Android devices.</Text>
       </View>
     );
   }
 
-  if (!permission.granted) {
-    console.log('[NafisaSmartHome] Camera permission not granted');
+  if (!permission.hasPermission) {
     return (
       <View style={styles.container}>
         <View style={styles.permissionContainer}>
-          <Camera size={64} color="#3B82F6" />
+          <CameraIcon size={64} color="#3B82F6" />
           <Text style={styles.title}>Camera Access Required</Text>
           <Text style={styles.subtitle}>
             We need camera access for face recognition authentication
           </Text>
-          <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
+          <TouchableOpacity style={styles.permissionButton} onPress={permission.requestPermission}>
             <Text style={styles.permissionButtonText}>Grant Camera Access</Text>
           </TouchableOpacity>
         </View>
@@ -142,15 +157,19 @@ export default function FaceRecognitionScreen() {
     );
   }
 
-  const simulateFaceRecognition = () => {};
+  if (!isReady) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.loadingText}>Loading camera...</Text>
+      </View>
+    );
+  }
 
   const toggleCameraFacing = () => {
-    console.log('[NafisaSmartHome] Toggle camera');
     setFacing(current => (current === 'back' ? 'front' : 'back'));
   };
 
   const goBack = () => {
-    console.log('[NafisaSmartHome] Back from face-recognition');
     router.back();
   };
 
@@ -164,20 +183,23 @@ export default function FaceRecognitionScreen() {
       </View>
 
       <View style={styles.cameraContainer}>
-        <CameraView ref={cameraRef} style={styles.camera} facing={facing} photo />
+        <VisionCamera
+          style={styles.camera}
+          device={device!}
+          isActive
+          frameProcessor={frameProcessor}
+        />
         <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.overlay]}>
-          {/* Face detection frame */}
-          <View style={[styles.faceFrame, 
+          <View style={[styles.faceFrame,
             isScanning && styles.faceFrameScanning,
             scanResult === 'success' && styles.faceFrameSuccess,
             scanResult === 'failed' && styles.faceFrameFailed
           ]} />
-          
-          {/* Status indicator */}
+
           <View style={styles.scanningIndicator}>
             <Text style={styles.scanningText}>{isScanning ? 'Scanning…' : statusText}</Text>
           </View>
-          
+
           {scanResult === 'success' && (
             <View style={styles.successIndicator}>
               <CheckCircle size={32} color="#10B981" />
@@ -187,7 +209,7 @@ export default function FaceRecognitionScreen() {
               )}
             </View>
           )}
-          
+
           {scanResult === 'failed' && (
             <View style={styles.failedIndicator}>
               <Text style={styles.failedText}>Face not recognized</Text>
@@ -198,22 +220,18 @@ export default function FaceRecognitionScreen() {
       </View>
 
       <View style={styles.controls}>
-        <Text style={styles.instructions}>
-          Align your face within the frame, then tap Scan to authenticate.
-        </Text>
-        <View style={[styles.controlButtons, { justifyContent: 'space-between' }] }>
-          <TouchableOpacity style={styles.flipButton} onPress={toggleCameraFacing}>
-            <RotateCcw size={24} color="#FFFFFF" />
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.scanButton, isScanning && styles.scanButtonDisabled]} 
-            onPress={() => attemptMatch()}
-            disabled={isScanning || scanResult === 'success'}
-          >
-            <Camera size={28} color="#FFFFFF" />
-            <Text style={styles.scanButtonText}>{isScanning ? 'Scanning…' : 'Scan Now'}</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={[styles.scanButton, isScanning && styles.scanButtonDisabled]}
+          onPress={attemptMatch}
+          disabled={isScanning}
+        >
+          <Text style={styles.scanButtonText}>{isScanning ? 'Scanning…' : 'Scan Face'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.rotateButton} onPress={toggleCameraFacing}>
+          <RotateCcw size={20} color="#E5E7EB" />
+          <Text style={styles.rotateButtonText}>Switch Camera</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -222,179 +240,176 @@ export default function FaceRecognitionScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#111827',
-  },
-  loadingText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    textAlign: 'center',
-    marginTop: 100,
-  },
-  permissionContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
+    backgroundColor: '#0F172A',
+    padding: 20,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
-    paddingTop: 60,
+    marginBottom: 16,
   },
   backButton: {
-    marginRight: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(148, 163, 184, 0.15)',
+    borderRadius: 10,
+    marginRight: 12,
   },
   backButtonText: {
-    color: '#3B82F6',
-    fontSize: 16,
+    color: '#E5E7EB',
+    fontWeight: '600',
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#9CA3AF',
-    textAlign: 'center',
-    marginBottom: 32,
-    lineHeight: 22,
-  },
-  permissionButton: {
-    backgroundColor: '#3B82F6',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  permissionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+    color: '#F9FAFB',
+    fontSize: 22,
+    fontWeight: '700',
   },
   cameraContainer: {
     flex: 1,
-    margin: 20,
     borderRadius: 20,
     overflow: 'hidden',
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1F2937',
   },
   camera: {
     flex: 1,
   },
   overlay: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 24,
   },
   faceFrame: {
-    width: 250,
-    height: 300,
-    borderWidth: 3,
-    borderColor: '#3B82F6',
-    borderRadius: 150,
-    borderStyle: 'dashed',
+    width: '70%',
+    aspectRatio: 3 / 4,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: 'rgba(59, 130, 246, 0.4)',
+    backgroundColor: 'transparent',
   },
   faceFrameScanning: {
-    borderColor: '#F59E0B',
+    borderColor: '#3B82F6',
   },
   faceFrameSuccess: {
     borderColor: '#10B981',
-    borderStyle: 'solid',
   },
   faceFrameFailed: {
     borderColor: '#EF4444',
-    borderStyle: 'solid',
   },
   scanningIndicator: {
     position: 'absolute',
-    bottom: 100,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
+    bottom: 32,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
   scanningText: {
-    color: '#F59E0B',
+    color: '#E5E7EB',
     fontSize: 16,
     fontWeight: '600',
   },
   successIndicator: {
     position: 'absolute',
-    bottom: 100,
+    top: 32,
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderRadius: 20,
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
   },
   successText: {
     color: '#10B981',
     fontSize: 16,
-    fontWeight: '600',
-    marginTop: 8,
+    fontWeight: '700',
+    marginTop: 4,
   },
   userNameText: {
-    color: '#FFFFFF',
+    color: '#34D399',
     fontSize: 14,
-    fontWeight: '600',
-    marginTop: 8,
+    marginTop: 2,
   },
   failedIndicator: {
     position: 'absolute',
-    bottom: 100,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
+    top: 32,
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
   },
   failedText: {
-    color: '#EF4444',
+    color: '#F87171',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   failedSubtext: {
     color: '#FCA5A5',
     fontSize: 12,
-    fontWeight: '600',
     marginTop: 4,
   },
   controls: {
-    padding: 20,
-  },
-  instructions: {
-    color: '#9CA3AF',
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  controlButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  flipButton: {
-    backgroundColor: '#374151',
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scanButton: {
-    backgroundColor: '#3B82F6',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderRadius: 12,
+    marginTop: 16,
     gap: 12,
   },
+  scanButton: {
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    backgroundColor: '#2563EB',
+  },
   scanButtonDisabled: {
-    backgroundColor: '#6B7280',
+    backgroundColor: 'rgba(37, 99, 235, 0.5)',
   },
   scanButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
+    color: '#F9FAFB',
+    fontSize: 16,
     fontWeight: '600',
+  },
+  rotateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+  },
+  rotateButtonText: {
+    color: '#E5E7EB',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  permissionContainer: {
+    alignItems: 'center',
+    backgroundColor: '#111827',
+    padding: 24,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+  },
+  permissionButton: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#2563EB',
+    borderRadius: 12,
+  },
+  permissionButtonText: {
+    color: '#F8FAFC',
+    fontWeight: '600',
+  },
+  subtitle: {
+    color: '#94A3B8',
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  loadingText: {
+    color: '#E5E7EB',
+    fontSize: 16,
+    textAlign: 'center',
   },
 });

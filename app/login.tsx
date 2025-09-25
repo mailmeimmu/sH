@@ -14,10 +14,17 @@ import { BlurView } from 'expo-blur';
 // Create an animated version of LinearGradient
 const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 
+type BiometricAvailability = {
+  available: boolean;
+  biometryType?: string;
+  isSimulated?: boolean;
+  error?: string;
+};
+
 export default function LoginScreen() {
   const { width, height } = useWindowDimensions();
   const isSmall = width < 380 || height < 700;
-  const [availableBiometric, setAvailableBiometric] = React.useState(null);
+  const [availableBiometric, setAvailableBiometric] = React.useState<BiometricAvailability | null>(null);
   const brandAnim = React.useRef(new Animated.Value(0)).current;
   const glowAnim = React.useRef(new Animated.Value(0)).current;
   const tileAnims = React.useRef([

@@ -175,7 +175,6 @@ class DatabaseService {
       };
       this.members.set(adminUser.id, adminUser);
       this.users.set(adminUser.id, adminUser);
-      this.currentUser = adminUser;
       if (this.db) {
         await exec(this.db, 'INSERT OR REPLACE INTO members (id,name,email,role,relation,pin,preferredLogin,policies,faceId,faceTemplate,registeredAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
           adminUser.id,
@@ -191,9 +190,6 @@ class DatabaseService {
           adminUser.registeredAt,
         ]);
       }
-    } else if (!this.currentUser) {
-      const firstMember = Array.from(this.members.values())[0];
-      if (firstMember) this.currentUser = firstMember;
     }
   }
 

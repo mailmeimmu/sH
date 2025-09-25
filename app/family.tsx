@@ -160,7 +160,7 @@ export default function FamilyScreen() {
               {/* Room and device access */}
               <View style={{ marginTop: 8 }}>
                 <Text style={{ color: '#9CA3AF', marginBottom: 6 }}>Area Access</Text>
-                <AreaRow title="Hall" items={[['light','Light'],['ac','AC']]} member={m} area="hall" onToggle={(key)=>{
+                <AreaRow title="Hall" items={[['light','Light'],['ac','AC']]} member={m} area="hall" onToggle={(key: string)=>{
                   updateMemberPolicies(m.id, (policies) => {
                     const areas = { ...(policies.areas || {}) };
                     const curr = areas.hall || {};
@@ -168,7 +168,7 @@ export default function FamilyScreen() {
                     return { ...policies, areas };
                   });
                 }} />
-                <AreaRow title="Kitchen" items={[['light','Light'],['ac','AC']]} member={m} area="kitchen" onToggle={(key)=>{
+                <AreaRow title="Kitchen" items={[['light','Light'],['ac','AC']]} member={m} area="kitchen" onToggle={(key: string)=>{
                   updateMemberPolicies(m.id, (policies) => {
                     const areas = { ...(policies.areas || {}) };
                     const curr = areas.kitchen || {};
@@ -176,7 +176,7 @@ export default function FamilyScreen() {
                     return { ...policies, areas };
                   });
                 }} />
-                <AreaRow title="Bedroom" items={[['light','Light'],['ac','AC'],['door','Door']]} member={m} area="bedroom" onToggle={(key)=>{
+                <AreaRow title="Bedroom" items={[['light','Light'],['ac','AC'],['door','Door']]} member={m} area="bedroom" onToggle={(key: string)=>{
                   updateMemberPolicies(m.id, (policies) => {
                     const areas = { ...(policies.areas || {}) };
                     const curr = areas.bedroom || {};
@@ -184,7 +184,7 @@ export default function FamilyScreen() {
                     return { ...policies, areas };
                   });
                 }} />
-                <AreaRow title="Bathroom" items={[['light','Light'],['ac','AC'],['door','Door']]} member={m} area="bathroom" onToggle={(key)=>{
+                <AreaRow title="Bathroom" items={[['light','Light'],['ac','AC'],['door','Door']]} member={m} area="bathroom" onToggle={(key: string)=>{
                   updateMemberPolicies(m.id, (policies) => {
                     const areas = { ...(policies.areas || {}) };
                     const curr = areas.bathroom || {};
@@ -192,7 +192,7 @@ export default function FamilyScreen() {
                     return { ...policies, areas };
                   });
                 }} />
-                <AreaRow title="Main Door" items={[['door','Door']]} member={m} area="main" onToggle={(key)=>{
+                <AreaRow title="Main Door" items={[['door','Door']]} member={m} area="main" onToggle={(key: string)=>{
                   updateMemberPolicies(m.id, (policies) => {
                     const areas = { ...(policies.areas || {}) };
                     const curr = areas.main || {};
@@ -209,7 +209,13 @@ export default function FamilyScreen() {
   );
 }
 
-function PermToggle({ label, value, onToggle }: any) {
+type PermToggleProps = {
+  label: string;
+  value: boolean;
+  onToggle?: () => void;
+};
+
+function PermToggle({ label, value, onToggle }: PermToggleProps) {
   return (
     <TouchableOpacity style={[styles.toggle, value && styles.toggleOn]} onPress={onToggle}>
       <Text style={[styles.toggleText, value && styles.toggleTextOn]}>{label}</Text>
@@ -217,8 +223,16 @@ function PermToggle({ label, value, onToggle }: any) {
   );
 }
 
-function AreaRow({ title, items, member, area, onToggle }: any) {
-  const curr = (member.policies.areas && member.policies.areas[area]) || {};
+type AreaRowProps = {
+  title: string;
+  items: [string, string][];
+  member: any;
+  area: string;
+  onToggle: (key: string) => void;
+};
+
+function AreaRow({ title, items, member, area, onToggle }: AreaRowProps) {
+  const curr = (member?.policies?.areas && member.policies.areas[area]) || {};
   return (
     <View style={{ marginBottom: 8 }}>
       <Text style={{ color: '#E5E7EB', marginBottom: 6 }}>{title}</Text>

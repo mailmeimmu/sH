@@ -54,15 +54,31 @@ export type DeviceState = {
   recordedAt?: string | null;
 };
 
-async function post(path: string, body: any, headers: Record<string, string> = {}) {
+type PostResult = {
+  ok: boolean;
+  status: number;
+  data: Record<string, any>;
+  networkError: boolean;
+};
+
+async function post(path: string, body: any, headers: Record<string, string> = {}): Promise<PostResult> {
   const url = buildUrl(path);
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data, networkError: false };
+  } catch (error: any) {
+    return {
+      ok: false,
+      status: 0,
+      data: { error: error?.message || 'Network request failed' },
+      networkError: true,
+    };
+  }
 }
 
 export const remoteApi = {
@@ -89,9 +105,9 @@ export const remoteApi = {
     return { success: false, error: data?.error || `auth failed (${status})` };
   },
   async authByPin(pin: string) {
-    const { ok, data } = await post('/api/auth/pin', { pin });
+    const { ok, data, networkError } = await post('/api/auth/pin', { pin });
     if (ok) return { success: true, user: data?.user };
-    return { success: false, error: data?.error || 'invalid PIN' };
+    return { success: false, error: data?.error || 'Invalid PIN or service unavailable.', networkError };
   },
   async listMembers() {
     const res = await fetch(buildUrl('/api/users'));

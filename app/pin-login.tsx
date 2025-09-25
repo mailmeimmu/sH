@@ -16,7 +16,11 @@ export default function PinLoginScreen() {
     try {
       let res: any = { success: false };
       if (remoteApi.enabled) {
-        res = await remoteApi.authByPin(pin.trim());
+        const remoteRes: any = await remoteApi.authByPin(pin.trim());
+        res = remoteRes;
+        if (!remoteRes.success && remoteRes.networkError) {
+          res = await db.authenticateByPin(pin.trim());
+        }
       } else {
         res = await db.authenticateByPin(pin.trim());
       }
@@ -25,7 +29,7 @@ export default function PinLoginScreen() {
         try { await SecureStore.setItemAsync('last_user_id', res.user.id); } catch {}
         router.replace('/(tabs)');
       } else {
-        Alert.alert('Invalid PIN', 'Please try again');
+        Alert.alert('Sign-In Failed', res.error || 'Please try again');
       }
     } finally {
       setLoading(false);

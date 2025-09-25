@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import type { ReactNode } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { Screen, Container } from '../../components/Layout';
 import { router } from 'expo-router';
@@ -80,7 +81,7 @@ export default function SettingsScreen() {
             subtitle="Device alerts and updates"
             showToggle={true}
             toggleValue={notifications}
-            onToggle={setNotifications}
+            onToggle={(value) => setNotifications(value)}
           />
           
           <SettingsItem 
@@ -89,7 +90,7 @@ export default function SettingsScreen() {
             subtitle="Automatic lighting control"
             showToggle={true}
             toggleValue={autoLights}
-            onToggle={setAutoLights}
+            onToggle={(value) => setAutoLights(value)}
           />
           
           <SettingsItem 
@@ -98,7 +99,7 @@ export default function SettingsScreen() {
             subtitle="Optimize power consumption"
             showToggle={true}
             toggleValue={energySaver}
-            onToggle={setEnergySaver}
+            onToggle={(value) => setEnergySaver(value)}
           />
           <SettingsItem
             icon={<Mic size={20} color="#10B981" />}
@@ -106,7 +107,7 @@ export default function SettingsScreen() {
             subtitle="Enable or disable voice control"
             showToggle={true}
             toggleValue={db.can('voice.use')}
-            onToggle={async (value) => {
+            onToggle={async (value: boolean) => {
               const u = db.getCurrentUser();
               if (u) {
                 const policies = u.policies || db.defaultPolicies(u.role);
@@ -169,7 +170,18 @@ export default function SettingsScreen() {
   );
 }
 
-function SettingsItem({ icon, title, subtitle, onPress, showArrow, showToggle, toggleValue, onToggle }: any) {
+type SettingsItemProps = {
+  icon: ReactNode;
+  title: string;
+  subtitle: string;
+  onPress?: () => void;
+  showArrow?: boolean;
+  showToggle?: boolean;
+  toggleValue?: boolean;
+  onToggle?: (value: boolean) => void | Promise<void>;
+};
+
+function SettingsItem({ icon, title, subtitle, onPress, showArrow, showToggle, toggleValue = false, onToggle }: SettingsItemProps) {
   return (
     <TouchableOpacity style={styles.settingsItem} onPress={onPress} disabled={!onPress}>
       <View style={styles.settingsItemLeft}>
@@ -186,7 +198,7 @@ function SettingsItem({ icon, title, subtitle, onPress, showArrow, showToggle, t
         {showToggle ? (
           <TouchableOpacity 
             style={[styles.toggle, toggleValue && styles.toggleActive]}
-            onPress={() => onToggle(!toggleValue)}
+            onPress={() => onToggle?.(!toggleValue)}
           >
             <View style={[styles.toggleButton, toggleValue && styles.toggleButtonActive]} />
           </TouchableOpacity>
