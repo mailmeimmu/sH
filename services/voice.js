@@ -249,7 +249,19 @@ class VoiceService {
     
     console.log('[Voice] Speaking:', text);
     
+    // Cancel any ongoing speech before starting new one
+    if (Platform.OS === 'web' && this.synthesis) {
+      this.synthesis.cancel();
+    }
+    
     if (Platform.OS !== 'web' && Speech && Speech.speak) {
+      // Stop any current speech on native platforms
+      try {
+        Speech.stop();
+      } catch (e) {
+        // Ignore errors when stopping speech
+      }
+      
       return new Promise(resolve => {
         try {
           Speech.speak(text, { 
@@ -257,7 +269,7 @@ class VoiceService {
             onStopped: resolve, 
             onError: resolve,
             language: 'en-US', 
-            rate: 0.9,
+            rate: 0.85,
             volume: 0.8
           });
         } catch (e) {
@@ -267,15 +279,13 @@ class VoiceService {
       });
     } else if (Platform.OS === 'web' && this.synthesis) {
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.8;
+      utterance.rate = 0.85;
       utterance.pitch = 1;
       utterance.volume = 0.8;
       
       return new Promise((resolve) => {
         utterance.onend = resolve;
         utterance.onerror = resolve;
-        // Cancel any existing speech
-        this.synthesis.cancel();
         this.synthesis.speak(utterance);
       });
     } else {

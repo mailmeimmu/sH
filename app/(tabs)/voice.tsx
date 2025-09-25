@@ -419,9 +419,11 @@ export default function VoiceControlScreen() {
   const handleVoiceCommand = async (text: string) => {
     console.log('[Voice] Processing command:', text);
     addUserMessage(text);
+    
+    let responseMessage = '';
     try {
       // Limit history to save tokens
-      const chatHistory: ChatMessage[] = conversationHistory.slice(-4).map((entry) => ({
+      const chatHistory: ChatMessage[] = conversationHistory.slice(-2).map((entry) => ({
         role: entry.type,
         content: entry.message,
       }));
@@ -430,16 +432,16 @@ export default function VoiceControlScreen() {
       const reply = await askGemini(text, chatHistory);
       console.log('[Voice] Gemini reply:', JSON.stringify(reply, null, 2));
       
-      const message = await executeAssistantReply(reply);
-      console.log('[Voice] Executed reply:', message);
-      addAssistantMessage(message);
+      responseMessage = await executeAssistantReply(reply);
+      console.log('[Voice] Executed reply:', responseMessage);
+      addAssistantMessage(responseMessage);
       updateSuggestions(text, reply);
-      await speakResponse(message);
+      await speakResponse(responseMessage);
     } catch (e) {
-      const fallback = `Sorry, I had trouble processing that command. ${e?.message || 'Please try again.'}`;
+      responseMessage = `Sorry, I had trouble processing that command. ${e?.message || 'Please try again.'}`;
       console.log('[Voice] Error processing command:', e);
-      addAssistantMessage(fallback);
-      await speakResponse(fallback);
+      addAssistantMessage(responseMessage);
+      await speakResponse(responseMessage);
     }
   };
 

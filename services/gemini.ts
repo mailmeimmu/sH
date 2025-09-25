@@ -1,5 +1,7 @@
 // Simple Google Gemini API client for Expo/React Native
 
+import { parseLocalCommand } from './local-parser';
+
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 export type GeminiAction =
@@ -20,9 +22,8 @@ export type GeminiAssistantReply = {
 };
 
 const GEMINI_MODELS = [
-  'gemini-1.5-flash',
-  'gemini-1.5-pro'
-];
+  'gemini-1.5-flash-latest',
+  'gemini-1.5-flash'
 
 const getGeminiEndpoint = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -309,20 +310,34 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   const body = {
     contents,
     generationConfig: { 
-      temperature: 0.1, 
+      temperature: 0.2, 
       topP: 0.8, 
-      maxOutputTokens: 150,
+      maxOutputTokens: 100,
       candidateCount: 1
     },
   };
 
   console.log('[Gemini] Making API request to Google');
   
+  // Implement retry with exponential backoff for quota errors
+  const retryWithBackoff = async (model, attempt = 1) => {
+    const result = await tryGeminiModel(model, body, apiKey);
+    
+    if (!result.success && result.status === 429 && attempt < 3) {
+      const retryDelay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+      console.log(`[Gemini] Quota exceeded, retrying in ${retryDelay}ms (attempt ${attempt + 1})`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      return retryWithBackoff(model, attempt + 1);
+    }
+    
+    return result;
+  };
+
   // Try models in order until one works
   let lastError = null;
   for (const model of GEMINI_MODELS) {
     try {
-      const result = await tryGeminiModel(model, body, apiKey);
+      const result = await retryWithBackoff(model);
       if (result.success) {
         const data = result.data;
         const candidate = data?.candidates?.[0];
@@ -363,8 +378,24 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
 
   // All models failed
   console.log('[Gemini] All models failed, last error:', lastError);
+  
+  // Fallback to local command parsing when Gemini is unavailable
+  console.log('[Gemini] Falling back to local command parser');
+  const localResult = parseLocalCommand(userText);
+  
+  if (localResult.success) {
+    return {
+      action: (localResult.action as GeminiAction) || 'none',
+      say: localResult.say,
+      room: localResult.room,
+      device: localResult.device,
+      value: localResult.value,
+      door: localResult.door,
+    };
+  }
+  
   return {
-    say: `Assistant unavailable: ${lastError || 'All models failed'}`,
+    say: localResult.say || "I'm having trouble connecting to the cloud assistant. I can still help with basic commands like 'turn on lights' or 'lock doors'.",
     action: 'none',
   };
 }
