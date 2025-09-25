@@ -19,7 +19,7 @@ export type GeminiAssistantReply = {
   door?: string;
 };
 
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
 
 const RAW_API_BASE = process.env.EXPO_PUBLIC_API_BASE || '';
 
@@ -34,9 +34,8 @@ function buildAssistantUrl() {
 const ASSISTANT_URL = buildAssistantUrl();
 
 function getApiKey() {
-  const envKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-  const hardcodedKey = 'AIzaSyAcLNrhvMSahZk7BKr-rL2cMZAUm545_X4';
-  return envKey || hardcodedKey;
+  // Use the provided API key directly
+  return 'AIzaSyAcLNrhvMSahZk7BKr-rL2cMZAUm545_X4';
 }
 
 function buildPrompt(userText: string) {

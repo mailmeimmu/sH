@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Speech from 'expo-speech';
-import { Alert } from 'react-native';
+import { Alert, PermissionsAndroid } from 'react-native';
 
 let ExpoSpeechRecognitionModule;
 let addSpeechRecognitionListener;
@@ -131,9 +131,12 @@ class VoiceService {
   }
 
   async startListening() {
+    console.log('[Voice] Starting to listen...', { platform: Platform.OS, available: this.sttAvailable });
     return new Promise((resolve, reject) => {
-      if (Platform.OS !== 'web' && !this.sttAvailable && !this.expoRecognition) {
-        reject(new Error('Speech recognition not available. Please use the text input instead.'));
+      // Check availability first
+      if (!this.isAvailable()) {
+        console.log('[Voice] Speech recognition not available');
+        reject(new Error('Speech recognition not available on this device. Please use the text input instead.'));
         return;
       }
       
@@ -141,19 +144,23 @@ class VoiceService {
       this.rejectPromise = reject;
       this.isListening = true;
       try {
-        if (this.recognition) {
+        if (Platform.OS === 'web' && this.recognition) {
+          console.log('[Voice] Using web speech recognition');
           this.recognition.onresult = (event) => {
             this.isListening = false;
+            console.log('[Voice] Web recognition result:', event.results[0][0].transcript);
             const transcript = event.results[0][0].transcript;
             resolve({ transcript, confidence: event.results[0][0].confidence });
           };
           this.recognition.onerror = (event) => {
             this.isListening = false;
+            console.log('[Voice] Web recognition error:', event.error);
             reject(new Error(event.error || 'Speech error'));
           };
           this.recognition.onend = () => { this.isListening = false; };
           this.recognition.start();
-        } else if (this.expoRecognition) {
+        } else if (Platform.OS !== 'web' && this.expoRecognition) {
+          console.log('[Voice] Using Expo speech recognition');
           if (typeof addSpeechRecognitionListener === 'function') {
             this.expoSubscriptions.push(
               addSpeechRecognitionListener('result', this.handleExpoResult),
@@ -171,13 +178,14 @@ class VoiceService {
               });
             }
           } catch (error) {
-            console.log('[voice] expo speech start failed', error?.message || error);
+            console.log('[Voice] Expo speech start failed', error?.message || error);
             this.isListening = false;
             reject(error);
           }
         } else {
           this.isListening = false;
-          reject(new Error('Speech recognition not available. Please use text input instead.'));
+          console.log('[Voice] No speech recognition available');
+          reject(new Error('Speech recognition not available on this platform. Please use text input instead.'));
         }
       } catch (e) {
         this.isListening = false;
@@ -198,7 +206,39 @@ class VoiceService {
   }
 
   async requestPermissions() {
-    if (Platform.OS === 'web') return { granted: true };
+    if (Platform.OS === 'web') {
+      // Check for microphone permission on web
+      try {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          await navigator.mediaDevices.getUserMedia({ audio: true });
+          return { granted: true };
+        }
+      } catch (error) {
+        console.log('[Voice] Web microphone permission denied:', error);
+        return { granted: false };
+      }
+      return { granted: true };
+    }
+    
+    // Android permission handling
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Smart Home Voice Control',
+            message: 'This app needs access to your microphone for voice commands',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        return { granted: granted === PermissionsAndroid.RESULTS.GRANTED };
+      } catch (error) {
+        console.log('[Voice] Android permission error:', error);
+        return { granted: false };
+      }
+    }
     
     try {
       if (this.expoRecognition && this.expoRecognition.requestPermissionsAsync) {
@@ -277,7 +317,10 @@ class VoiceService {
   }
 
   isAvailable() {
-    return Platform.OS === 'web' ? !!this.sttAvailable : (!!this.sttAvailable || !!this.expoRecognition);
+    if (Platform.OS === 'web') {
+      return !!(this.recognition || (window.webkitSpeechRecognition || window.SpeechRecognition));
+    }
+    return !!(this.sttAvailable || this.expoRecognition);
   }
 }
 
