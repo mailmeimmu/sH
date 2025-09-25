@@ -34,7 +34,7 @@ export function scanFaces(frame: any) {
   // For native platforms, try to use actual face detection
   try {
     // Try to import and use the real face detector
-    const faceDetector = require('react-native-vision-camera-face-detector');
+    const faceDetector = require('vision-camera-face-detector');
     if (faceDetector && faceDetector.scanFaces) {
       return faceDetector.scanFaces(frame);
     }
