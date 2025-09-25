@@ -420,6 +420,7 @@ export default function VoiceControlScreen() {
     console.log('[Voice] Processing command:', text);
     addUserMessage(text);
     try {
+      // Limit history to save tokens
       const chatHistory: ChatMessage[] = conversationHistory.slice(-4).map((entry) => ({
         role: entry.type,
         content: entry.message,
@@ -427,7 +428,7 @@ export default function VoiceControlScreen() {
       
       console.log('[Voice] Sending to Gemini:', { text, historyLength: chatHistory.length });
       const reply = await askGemini(text, chatHistory);
-      console.log('[Voice] Gemini reply:', reply);
+      console.log('[Voice] Gemini reply:', JSON.stringify(reply, null, 2));
       
       const message = await executeAssistantReply(reply);
       console.log('[Voice] Executed reply:', message);
@@ -435,7 +436,7 @@ export default function VoiceControlScreen() {
       updateSuggestions(text, reply);
       await speakResponse(message);
     } catch (e) {
-      const fallback = 'Sorry, I had trouble processing that. Please try again.';
+      const fallback = `Sorry, I had trouble processing that command. ${e?.message || 'Please try again.'}`;
       console.log('[Voice] Error processing command:', e);
       addAssistantMessage(fallback);
       await speakResponse(fallback);

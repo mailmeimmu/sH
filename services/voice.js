@@ -247,6 +247,8 @@ class VoiceService {
   async speak(text) {
     if (!text || typeof text !== 'string') return;
     
+    console.log('[Voice] Speaking:', text);
+    
     if (Platform.OS !== 'web' && Speech && Speech.speak) {
       return new Promise(resolve => {
         try {
@@ -255,7 +257,7 @@ class VoiceService {
             onStopped: resolve, 
             onError: resolve,
             language: 'en-US', 
-            rate: 0.95,
+            rate: 0.9,
             volume: 0.8
           });
         } catch (e) {
@@ -265,17 +267,20 @@ class VoiceService {
       });
     } else if (Platform.OS === 'web' && this.synthesis) {
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
+      utterance.rate = 0.8;
       utterance.pitch = 1;
       utterance.volume = 0.8;
       
       return new Promise((resolve) => {
         utterance.onend = resolve;
         utterance.onerror = resolve;
+        // Cancel any existing speech
+        this.synthesis.cancel();
         this.synthesis.speak(utterance);
       });
     } else {
       // Fallback for unsupported platforms
+      console.log('[Voice] Speech not available, text was:', text);
       return Promise.resolve();
     }
   }

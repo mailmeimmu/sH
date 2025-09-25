@@ -21,8 +21,7 @@ export type GeminiAssistantReply = {
 
 const GEMINI_MODELS = [
   'gemini-1.5-flash',
-  'gemini-1.0-pro',
-  'gemini-pro'
+  'gemini-1.5-pro'
 ];
 
 const getGeminiEndpoint = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -40,7 +39,6 @@ function buildAssistantUrl() {
 const ASSISTANT_URL = buildAssistantUrl();
 
 function getApiKey() {
-  // Use the provided API key directly
   return 'AIzaSyAcLNrhvMSahZk7BKr-rL2cMZAUm545_X4';
 }
 
@@ -68,6 +66,10 @@ function buildPrompt(userText: string) {
   const system = `You are a helpful smart home voice assistant for "Smart Home By Nafisa Tabasum".
 You can control devices and answer questions naturally.
 
+Available rooms: main hall (mainhall), bedroom 1 (bedroom1), bedroom 2 (bedroom2), kitchen
+Available devices: light, fan, ac (air conditioner)
+Available doors: main hall, bedroom 1, bedroom 2, kitchen
+
 ALWAYS respond in this exact format:
 Line 1: Your natural conversational response
 Line 2: COMMAND: action=X; room=Y; device=Z; value=W; door=D
@@ -76,6 +78,14 @@ Examples:
 User: "Turn on all lights"
 Response: "I'll turn on all the lights in your home."
 COMMAND: action=device.set; room=all; device=light; value=on
+
+User: "Turn on bedroom 1 fan"
+Response: "I'll turn on the fan in bedroom 1."
+COMMAND: action=device.set; room=bedroom1; device=fan; value=on
+
+User: "Lock all doors"
+Response: "I'll lock all the doors for you."
+COMMAND: action=door.lock_all
 
 User: "What's the weather?"
 Response: "I'm a smart home assistant and don't have weather data, but I can help control your devices."
@@ -299,9 +309,9 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   const body = {
     contents,
     generationConfig: { 
-      temperature: 0.3, 
+      temperature: 0.1, 
       topP: 0.8, 
-      maxOutputTokens: 256,
+      maxOutputTokens: 150,
       candidateCount: 1
     },
   };
