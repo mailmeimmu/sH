@@ -133,13 +133,6 @@ class VoiceService {
   async startListening() {
     console.log('[Voice] Starting to listen...', { platform: Platform.OS, available: this.sttAvailable });
     return new Promise((resolve, reject) => {
-      // Check availability first
-      if (!this.isAvailable()) {
-        console.log('[Voice] Speech recognition not available');
-        reject(new Error('Speech recognition not available on this device. Please use the text input instead.'));
-        return;
-      }
-      
       this.resolvePromise = resolve;
       this.rejectPromise = reject;
       this.isListening = true;
@@ -185,7 +178,7 @@ class VoiceService {
         } else {
           this.isListening = false;
           console.log('[Voice] No speech recognition available');
-          reject(new Error('Speech recognition not available on this platform. Please use text input instead.'));
+          reject(new Error('Speech recognition not available'));
         }
       } catch (e) {
         this.isListening = false;

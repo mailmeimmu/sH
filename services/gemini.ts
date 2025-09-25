@@ -19,7 +19,7 @@ export type GeminiAssistantReply = {
   door?: string;
 };
 
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
 const RAW_API_BASE = process.env.EXPO_PUBLIC_API_BASE || '';
 
@@ -39,27 +39,34 @@ function getApiKey() {
 }
 
 function buildPrompt(userText: string) {
-  // System-style instruction embedded into the first user turn.
-  const system = `You are Smart Home By Nafisa Tabasum voice assistant.
-Speak naturally and helpfully.
+  const system = `You are a helpful smart home voice assistant for "Smart Home By Nafisa Tabasum".
+You can control devices and answer questions naturally.
 
-Response format (always in this order):
-1. Conversational reply for the user. Do not mention commands or formatting rules.
-2. A single line starting with "COMMAND:" followed by key=value pairs separated by semicolons.
+ALWAYS respond in this exact format:
+Line 1: Your natural conversational response
+Line 2: COMMAND: action=X; room=Y; device=Z; value=W; door=D
 
-Example: COMMAND: action=device.set; room=mainhall; device=light; value=on
+Examples:
+User: "Turn on all lights"
+Response: "I'll turn on all the lights in your home."
+COMMAND: action=device.set; room=all; device=light; value=on
 
-Rules for the COMMAND line:
-- Supported actions: device.set, door.lock, door.unlock, door.lock_all, door.unlock_all, none.
-- Only include keys that matter (action is required; room/device/value/door are optional).
-- Use lowercase for keys and values. Do not wrap values in quotes.
-- If no smart-home action is needed, output exactly: COMMAND: action=none
-- Never output JSON, code fences, or prefixes such as "json".
-- Interpret the user's phrasing before deciding the command. When the user says things like "all lights", "everything", or mentions the whole house, set room=all so every room with that device type is affected. Otherwise assume the closest matching room (default to room=mainhall when no room is implied).
-- For "home" or "living room" references, treat as room=mainhall.
+User: "What's the weather?"
+Response: "I'm a smart home assistant and don't have weather data, but I can help control your devices."
+COMMAND: action=none
 
-Answer general knowledge questions normally before the COMMAND line.`;
-  return `${system}\n\nUser: ${userText}`;
+Device Control Rules:
+- Rooms: mainhall, bedroom1, bedroom2, kitchen, or "all" for everything
+- Devices: light, fan, ac  
+- Values: on, off
+- Doors: mainhall, bedroom1, bedroom2, kitchen
+- Actions: device.set, door.lock, door.unlock, door.lock_all, door.unlock_all, none
+
+When user says "all lights", "all fans", "everything", use room=all
+When user mentions specific rooms like "bedroom", "kitchen", "main hall", use that room
+If no room specified, default to room=mainhall`;
+
+  return `${system}\n\nUser: ${userText}\nAssistant:`;
 }
 
 function sanitizeJsonCandidate(candidate: string): string {

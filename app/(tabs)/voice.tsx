@@ -153,17 +153,9 @@ export default function VoiceControlScreen() {
       return;
     }
     
-    if (!voiceService.isAvailable() && Platform.OS !== 'web') {
-      Alert.alert(
-        'Voice Recognition Unavailable', 
-        'Speech recognition is not available in this environment. Please use the text input below to type your commands.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-    
     setTranscript('');
     setIsListening(true);
+    console.log('[Voice] About to start listening...');
     
     // Use actual voice service
     voiceService.startListening()
@@ -179,9 +171,9 @@ export default function VoiceControlScreen() {
         if (error.message.includes('permission')) {
           Alert.alert('Microphone Permission', 'Please grant microphone permission to use voice control.');
         } else if (error.message.includes('not available')) {
-          addAssistantMessage('Voice recognition is not available. You can type your message below instead.');
+          addAssistantMessage('Voice recognition not available on this device. Please type your command below.');
         } else {
-          addAssistantMessage('Sorry, I couldn\'t hear that clearly. You can type your message or try the voice button again.');
+          addAssistantMessage('Could not understand your voice. Please try again or type your command.');
         }
       });
   };
@@ -428,18 +420,22 @@ export default function VoiceControlScreen() {
     console.log('[Voice] Processing command:', text);
     addUserMessage(text);
     try {
-      const chatHistory: ChatMessage[] = [...conversationHistory, { type: 'user' as const, message: text }].map((entry) => ({
+      const chatHistory: ChatMessage[] = conversationHistory.slice(-4).map((entry) => ({
         role: entry.type,
         content: entry.message,
       }));
+      
+      console.log('[Voice] Sending to Gemini:', { text, historyLength: chatHistory.length });
       const reply = await askGemini(text, chatHistory);
       console.log('[Voice] Gemini reply:', reply);
+      
       const message = await executeAssistantReply(reply);
+      console.log('[Voice] Executed reply:', message);
       addAssistantMessage(message);
       updateSuggestions(text, reply);
       await speakResponse(message);
     } catch (e) {
-      const fallback = 'Sorry, I could not contact the assistant service.';
+      const fallback = 'Sorry, I had trouble processing that. Please try again.';
       console.log('[Voice] Error processing command:', e);
       addAssistantMessage(fallback);
       await speakResponse(fallback);
