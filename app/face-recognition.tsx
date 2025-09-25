@@ -1,57 +1,32 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform } from 'react-native';
-import {
-  Camera as VisionCamera,
-  useCameraPermission,
-  useCameraDevice,
-  useFrameProcessor,
-} from 'react-native-vision-camera';
-import { runOnJS, useSharedValue } from 'react-native-reanimated';
-import { scanFaces } from 'vision-camera-face-detector';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { Camera as CameraIcon, RotateCcw, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { db } from '../services/database';
 import remoteApi from '../services/remote';
 import * as SecureStore from 'expo-secure-store';
-import { buildTemplateFromFace, normalizeVisionFace } from '../utils/face-template';
+
+// Platform-specific imports
+let FaceRecognitionNative: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    FaceRecognitionNative = require('../components/FaceRecognitionNative').default;
+  } catch (error) {
+    console.warn('FaceRecognitionNative not available:', error);
+  }
+}
 
 const FACE_STATUS_IDLE = 'Tap scan when you are ready';
 
 export default function FaceRecognitionScreen() {
-  const [facing, setFacing] = useState<'front' | 'back'>('front');
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<'success' | 'failed' | null>(null);
-  const [recognizedUser, setRecognizedUser] = useState<any>(null);
-  const [statusText, setStatusText] = useState(FACE_STATUS_IDLE);
-
-  const permission = useCameraPermission();
-  const device = useCameraDevice(facing);
-  const scanning = useSharedValue(false);
-  const scanningRef = useRef(false);
-  const permissionRequestedRef = useRef(false);
-
-  const isReady = useMemo(() => !!device && permission.hasPermission, [device, permission.hasPermission]);
-
-  useEffect(() => {
-    if (!permission.hasPermission && !permissionRequestedRef.current) {
-      permissionRequestedRef.current = true;
-      permission.requestPermission().catch(() => {});
+  const handleAuthenticationResult = useCallback(async (success: boolean, data?: any) => {
+    if (!success) {
+      return;
     }
-  }, [permission.hasPermission, permission]);
-
-  const ensurePermission = useCallback(async () => {
-    if (permission.hasPermission) return true;
-    const granted = await permission.requestPermission();
-    return granted;
-  }, [permission]);
-
-  const resetScanState = useCallback(() => {
-    scanning.value = false;
-    scanningRef.current = false;
-    setIsScanning(false);
-  }, [scanning]);
-
-  const processMatchResult = useCallback(async (templateStr: string) => {
+    
+    const templateStr = data?.template;
+    if (!templateStr) return;
+    
     try {
       let result: any = { success: false };
       if (remoteApi.enabled) {
@@ -63,177 +38,53 @@ export default function FaceRecognitionScreen() {
 
       if (result?.success && result.user) {
         db.currentUser = result.user;
-        setRecognizedUser(result.user);
-        setScanResult('success');
-        setStatusText(`Welcome back, ${result.user.name}`);
         try { await SecureStore.setItemAsync('last_user_id', result.user.id); } catch {}
         setTimeout(() => router.replace('/(tabs)'), 900);
       } else {
-        setScanResult('failed');
-        setStatusText('Face not recognized. Try again.');
-        setTimeout(() => setStatusText(FACE_STATUS_IDLE), 1500);
+        // Handle failure in the component
       }
     } catch (error) {
       console.log('[NafisaSmartHome] Face match error', error);
-      setScanResult('failed');
-      setStatusText('Unable to scan. Try again.');
-      setTimeout(() => setStatusText(FACE_STATUS_IDLE), 1500);
-    } finally {
-      resetScanState();
     }
-  }, [resetScanState]);
-
-  const handleDetectedFace = useCallback((face: any) => {
-    const normalized = normalizeVisionFace(face);
-    const templateStr = JSON.stringify(buildTemplateFromFace(normalized));
-    processMatchResult(templateStr);
-  }, [processMatchResult]);
-
-  const handleFaces = useCallback((faces: any[]) => {
-    if (!scanningRef.current) return;
-    if (!faces || faces.length === 0) {
-      return;
-    }
-    if (faces.length !== 1) {
-      setStatusText(faces.length > 1 ? 'Only one face should be in frame.' : 'Align your face within the frame.');
-      return;
-    }
-    scanning.value = false;
-    scanningRef.current = false;
-    setStatusText('Processing face...');
-    handleDetectedFace(faces[0]);
-  }, [handleDetectedFace, scanning]);
-
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
-    if (!scanning.value) return;
-    const faces = scanFaces(frame);
-    if (faces && faces.length > 0) {
-      runOnJS(handleFaces)(faces);
-    }
-  }, [handleFaces]);
-
-  const attemptMatch = useCallback(async () => {
-    if (isScanning) return;
-    const granted = await ensurePermission();
-    if (!granted) {
-      Alert.alert('Camera', 'Camera access is required for face recognition.');
-      return;
-    }
-    if (!device) {
-      Alert.alert('Camera', 'Camera not ready yet.');
-      return;
-    }
-    setRecognizedUser(null);
-    setScanResult(null);
-    setStatusText('Hold still and look at the camera.');
-    setIsScanning(true);
-    scanningRef.current = true;
-    scanning.value = true;
-  }, [device, ensurePermission, isScanning, scanning]);
+  }, []);
 
   if (Platform.OS === 'web') {
     return (
       <View style={styles.container}>
-        <Text style={styles.loadingText}>Face recognition is available on iOS and Android devices.</Text>
-      </View>
-    );
-  }
-
-  if (!permission.hasPermission) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.permissionContainer}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>Face Recognition</Text>
+        </View>
+        <View style={styles.webNotSupportedContainer}>
           <CameraIcon size={64} color="#3B82F6" />
-          <Text style={styles.title}>Camera Access Required</Text>
-          <Text style={styles.subtitle}>
-            We need camera access for face recognition authentication
+          <Text style={styles.webNotSupportedTitle}>Face recognition is not available on web</Text>
+          <Text style={styles.webNotSupportedText}>
+            Face recognition requires camera access and is only available on iOS and Android devices.
+            Please use another login method.
           </Text>
-          <TouchableOpacity style={styles.permissionButton} onPress={permission.requestPermission}>
-            <Text style={styles.permissionButtonText}>Grant Camera Access</Text>
+          <TouchableOpacity style={styles.primaryButton} onPress={() => router.back()}>
+            <Text style={styles.primaryButtonText}>Use Another Method</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  if (!isReady) {
+  if (!FaceRecognitionNative) {
     return (
       <View style={styles.container}>
-        <Text style={styles.loadingText}>Loading camera...</Text>
+        <Text style={styles.loadingText}>Camera not available</Text>
       </View>
     );
   }
 
-  const toggleCameraFacing = () => {
-    setFacing(current => (current === 'back' ? 'front' : 'back'));
-  };
-
-  const goBack = () => {
-    router.back();
-  };
-
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={goBack}>
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Face Recognition</Text>
-      </View>
-
-      <View style={styles.cameraContainer}>
-        <VisionCamera
-          style={styles.camera}
-          device={device!}
-          isActive
-          frameProcessor={frameProcessor}
-        />
-        <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.overlay]}>
-          <View style={[styles.faceFrame,
-            isScanning && styles.faceFrameScanning,
-            scanResult === 'success' && styles.faceFrameSuccess,
-            scanResult === 'failed' && styles.faceFrameFailed
-          ]} />
-
-          <View style={styles.scanningIndicator}>
-            <Text style={styles.scanningText}>{isScanning ? 'Scanning…' : statusText}</Text>
-          </View>
-
-          {scanResult === 'success' && (
-            <View style={styles.successIndicator}>
-              <CheckCircle size={32} color="#10B981" />
-              <Text style={styles.successText}>Welcome back!</Text>
-              {recognizedUser && (
-                <Text style={styles.userNameText}>{recognizedUser.name}</Text>
-              )}
-            </View>
-          )}
-
-          {scanResult === 'failed' && (
-            <View style={styles.failedIndicator}>
-              <Text style={styles.failedText}>Face not recognized</Text>
-              <Text style={styles.failedSubtext}>Please try again or use another login method.</Text>
-            </View>
-          )}
-        </View>
-      </View>
-
-      <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.scanButton, isScanning && styles.scanButtonDisabled]}
-          onPress={attemptMatch}
-          disabled={isScanning}
-        >
-          <Text style={styles.scanButtonText}>{isScanning ? 'Scanning…' : 'Scan Face'}</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.rotateButton} onPress={toggleCameraFacing}>
-          <RotateCcw size={20} color="#E5E7EB" />
-          <Text style={styles.rotateButtonText}>Switch Camera</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
+    <FaceRecognitionNative
+      onAuthenticationComplete={handleAuthenticationResult}
+      onGoBack={() => router.back()}
+    />
   );
 }
 
@@ -411,5 +262,28 @@ const styles = StyleSheet.create({
     color: '#E5E7EB',
     fontSize: 16,
     textAlign: 'center',
+  },
+  webNotSupportedContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    padding: 24,
+    gap: 16,
+  },
+  webNotSupportedTitle: {
+    color: '#F9FAFB',
+    fontSize: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  webNotSupportedText: {
+    color: '#94A3B8',
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 22,
   },
 });

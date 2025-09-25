@@ -1,18 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, Platform } from 'react-native';
-import {
-  Camera as VisionCamera,
-  useCameraPermission,
-  useCameraDevice,
-  useFrameProcessor,
-} from 'react-native-vision-camera';
-import { runOnJS, useSharedValue } from 'react-native-reanimated';
-import { scanFaces } from 'vision-camera-face-detector';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { Camera as CameraIcon, User, Save, CircleCheck as CheckCircle } from 'lucide-react-native';
 import { db } from '../services/database';
 import remoteApi from '../services/remote';
-import { buildTemplateFromFace, normalizeVisionFace, hashTemplateFromString } from '../utils/face-template';
+import { hashTemplateFromString } from '../utils/face-template';
+
+// Platform-specific imports
+let FaceRegistrationNative: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    FaceRegistrationNative = require('../components/FaceRegistrationNative').default;
+  } catch (error) {
+    console.warn('FaceRegistrationNative not available:', error);
+  }
+}
 
 const INITIAL_STATUS = 'Press scan when you are ready';
 
@@ -23,21 +25,6 @@ export default function RegistrationScreen() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [createdUser, setCreatedUser] = useState<any>(null);
 
-  const permission = useCameraPermission();
-  const device = useCameraDevice('front');
-  const scanning = useSharedValue(false);
-  const scanningRef = useRef(false);
-  const permissionRequestedRef = useRef(false);
-
-  useEffect(() => {
-    if (!permission.hasPermission && !permissionRequestedRef.current) {
-      permissionRequestedRef.current = true;
-      permission.requestPermission().catch(() => {});
-    }
-  }, [permission.hasPermission, permission]);
-
-  const isReady = useMemo(() => step !== 'capture' || (!!device && permission.hasPermission), [device, permission.hasPermission, step]);
-
   const handleInfoSubmit = () => {
     if (!userInfo.name.trim() || !userInfo.email.trim()) {
       Alert.alert('Error', 'Please fill in all fields');
@@ -45,12 +32,6 @@ export default function RegistrationScreen() {
     }
     setStep('capture');
   };
-
-  const ensurePermission = useCallback(async () => {
-    if (permission.hasPermission) return true;
-    const granted = await permission.requestPermission();
-    return granted;
-  }, [permission]);
 
   const finishRegistration = useCallback(() => {
     if (createdUser) {
@@ -63,12 +44,6 @@ export default function RegistrationScreen() {
     }
     router.replace('/(tabs)');
   }, [createdUser, userInfo.email]);
-
-  const resetCaptureState = useCallback(() => {
-    scanning.value = false;
-    scanningRef.current = false;
-    setIsCapturing(false);
-  }, [scanning]);
 
   const completeRegistration = useCallback(async (templateStr: string) => {
     const faceId = 'fid_' + hashTemplateFromString(templateStr);
@@ -105,56 +80,9 @@ export default function RegistrationScreen() {
       Alert.alert('Error', 'Could not capture face');
       setStatusText(INITIAL_STATUS);
     } finally {
-      resetCaptureState();
+      setIsCapturing(false);
     }
-  }, [resetCaptureState, userInfo, router]);
-
-  const handleDetectedFace = useCallback((face: any) => {
-    const normalized = normalizeVisionFace(face);
-    const templateStr = JSON.stringify(buildTemplateFromFace(normalized));
-    completeRegistration(templateStr);
-  }, [completeRegistration]);
-
-  const handleFaces = useCallback((faces: any[]) => {
-    if (!scanningRef.current) return;
-    if (!faces || faces.length === 0) {
-      return;
-    }
-    if (faces.length !== 1) {
-      setStatusText(faces.length > 1 ? 'Only one face should be in frame.' : 'Align your face within the frame.');
-      return;
-    }
-    scanning.value = false;
-    scanningRef.current = false;
-    setStatusText('Processing face...');
-    handleDetectedFace(faces[0]);
-  }, [handleDetectedFace, scanning]);
-
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
-    if (!scanning.value) return;
-    const faces = scanFaces(frame);
-    if (faces && faces.length > 0) {
-      runOnJS(handleFaces)(faces);
-    }
-  }, [handleFaces]);
-
-  const handleCapture = useCallback(async () => {
-    if (isCapturing) return;
-    const granted = await ensurePermission();
-    if (!granted) {
-      Alert.alert('Camera', 'Camera access is required to scan faces.');
-      return;
-    }
-    if (!device) {
-      Alert.alert('Camera', 'Camera not ready yet.');
-      return;
-    }
-    setStatusText('Hold still and look straight at the camera.');
-    setIsCapturing(true);
-    scanningRef.current = true;
-    scanning.value = true;
-  }, [device, ensurePermission, isCapturing, scanning]);
+  }, [userInfo]);
 
   const goBack = () => {
     if (step === 'capture') {
@@ -169,15 +97,23 @@ export default function RegistrationScreen() {
   if (Platform.OS === 'web') {
     return (
       <View style={styles.container}>
-        <Text style={styles.loadingText}>Face registration is available on iOS and Android devices.</Text>
-      </View>
-    );
-  }
-
-  if (!isReady) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.loadingText}>Loading camera...</Text>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={goBack}>
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>New Registration</Text>
+        </View>
+        <View style={styles.webNotSupportedContainer}>
+          <CameraIcon size={64} color="#3B82F6" />
+          <Text style={styles.webNotSupportedTitle}>Face registration is not available on web</Text>
+          <Text style={styles.webNotSupportedText}>
+            Face registration requires camera access and is only available on iOS and Android devices.
+            Please use the mobile app to register with face recognition.
+          </Text>
+          <TouchableOpacity style={styles.primaryButton} onPress={goBack}>
+            <Text style={styles.primaryButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -232,7 +168,7 @@ export default function RegistrationScreen() {
   }
 
   if (step === 'capture') {
-    if (!permission.hasPermission) {
+    if (!FaceRegistrationNative) {
       return (
         <View style={styles.container}>
           <View style={styles.header}>
@@ -241,57 +177,19 @@ export default function RegistrationScreen() {
             </TouchableOpacity>
             <Text style={styles.title}>Face Capture</Text>
           </View>
-          <View style={styles.permissionContainer}>
-            <CameraIcon size={64} color="#3B82F6" />
-            <Text style={styles.title}>Camera Access Required</Text>
-            <Text style={styles.subtitle}>
-              We need camera access to enroll your face for authentication
-            </Text>
-            <TouchableOpacity style={styles.primaryButton} onPress={permission.requestPermission}>
-              <Text style={styles.primaryButtonText}>Grant Camera Access</Text>
-            </TouchableOpacity>
+          <View style={styles.webNotSupportedContainer}>
+            <Text style={styles.loadingText}>Camera not available</Text>
           </View>
         </View>
       );
     }
 
     return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={goBack}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.title}>Face Capture</Text>
-        </View>
-
-        <View style={styles.cameraContainer}>
-          <VisionCamera
-            style={styles.camera}
-            device={device!}
-            isActive
-            frameProcessor={frameProcessor}
-          />
-          <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.overlay]}>
-            <View style={[styles.faceFrame,
-              isCapturing && styles.faceFrameActive,
-            ]} />
-
-            <View style={styles.scanningIndicator}>
-              <Text style={styles.scanningText}>{isCapturing ? 'Scanning…' : statusText}</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.controls}>
-          <TouchableOpacity
-            style={[styles.primaryButton, isCapturing && styles.primaryButtonDisabled]}
-            onPress={handleCapture}
-            disabled={isCapturing}
-          >
-            <Text style={styles.primaryButtonText}>{isCapturing ? 'Scanning…' : 'Scan Face'}</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <FaceRegistrationNative
+        userInfo={userInfo}
+        onRegistrationComplete={completeRegistration}
+        onGoBack={goBack}
+      />
     );
   }
 
@@ -472,5 +370,28 @@ const styles = StyleSheet.create({
     color: '#E5E7EB',
     fontSize: 16,
     textAlign: 'center',
+  },
+  webNotSupportedContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    padding: 24,
+    gap: 16,
+  },
+  webNotSupportedTitle: {
+    color: '#F9FAFB',
+    fontSize: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  webNotSupportedText: {
+    color: '#94A3B8',
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 22,
   },
 });
