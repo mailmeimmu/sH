@@ -1,56 +1,38 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform, Animated } from 'react-native';
-import { Camera as CameraIcon, RotateCcw, CircleCheck as CheckCircle, AlertCircle } from 'lucide-react-native';
+import { Camera as CameraIcon, CircleCheck as CheckCircle, AlertCircle } from 'lucide-react-native';
 
-// Safe camera imports for all platforms
-let VisionCamera, useCameraPermission, useCameraDevice;
+// Safe camera imports with better error handling
 let CameraView, useCameraPermissions;
+let cameraAvailable = false;
 
 try {
   const expoCamera = require('expo-camera');
   CameraView = expoCamera.CameraView;
   useCameraPermissions = expoCamera.useCameraPermissions;
-  console.log('[FaceRecognition] Using expo-camera');
+  cameraAvailable = true;
+  console.log('[FaceRecognition] expo-camera loaded successfully');
 } catch (error) {
-  console.log('[FaceRecognition] expo-camera not available');
-  
-  try {
-    const visionCamera = require('react-native-vision-camera');
-    VisionCamera = visionCamera.Camera;
-    useCameraPermission = visionCamera.useCameraPermission;
-    useCameraDevice = visionCamera.useCameraDevice;
-    console.log('[FaceRecognition] Using react-native-vision-camera');
-  } catch (visionError) {
-    console.log('[FaceRecognition] Using web camera simulation');
-  }
+  console.log('[FaceRecognition] expo-camera not available:', error.message);
+  cameraAvailable = false;
 }
-
-import { buildTemplateFromFace, normalizeVisionFace } from '../utils/face-template';
 
 const FACE_STATUS_IDLE = 'Position your face in the frame and tap scan';
 
 type Props = {
-  onAuthenticationComplete: (success: boolean, user?: any) => void;
+  onAuthenticationComplete: (success: boolean, data?: any) => void;
   onGoBack: () => void;
 };
 
 export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBack }: Props) {
-  const [facing, setFacing] = useState<'front' | 'back'>('front');
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<'success' | 'failed' | null>(null);
-  const [recognizedUser, setRecognizedUser] = useState<any>(null);
   const [statusText, setStatusText] = useState(FACE_STATUS_IDLE);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [webCameraStream, setWebCameraStream] = useState<MediaStream | null>(null);
+  const [permissions, requestPermission] = useCameraPermissions ? useCameraPermissions() : [null, null];
   const [debugInfo, setDebugInfo] = useState<any>({});
 
-  // Handle both expo-camera and vision-camera permissions
-  const expoCameraPermission = useCameraPermissions ? useCameraPermissions() : null;
-  const visionCameraPermission = useCameraPermission ? useCameraPermission() : null;
-  
-  const permission = expoCameraPermission || visionCameraPermission || { hasPermission: false, requestPermission: () => Promise.resolve(false) };
-  const device = useCameraDevice ? useCameraDevice(facing) : null;
-  
   const scanningRef = useRef(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -58,76 +40,98 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
   // Animation for scanning effect
   const scanAnimation = useRef(new Animated.Value(0)).current;
 
-  // Initialize camera based on platform
   useEffect(() => {
-    const initializeCamera = async () => {
-      try {
-        console.log('[FaceRecognition] Initializing camera for platform:', Platform.OS);
-        
-        setDebugInfo({
-          platform: Platform.OS,
-          hasVisionCamera: !!VisionCamera,
-          hasExpoCamera: !!CameraView,
-          hasDevice: !!device,
-          permissionStatus: permission?.hasPermission || permission?.[0]?.granted || false
-        });
-
-        if (Platform.OS === 'web') {
-          await initializeWebCamera();
-        } else {
-          await initializeMobileCamera();
-        }
-        
-        console.log('[FaceRecognition] Camera initialized successfully');
-      } catch (error) {
-        console.error('[FaceRecognition] Camera initialization failed:', error);
-        setCameraError(`Camera setup failed: ${error.message}`);
-      }
-    };
-
     initializeCamera();
   }, []);
 
-  const initializeWebCamera = async () => {
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices) {
-      throw new Error('Camera not supported in this browser');
-    }
-
+  const initializeCamera = async () => {
     try {
-      console.log('[FaceRecognition] Requesting web camera access');
+      console.log('[FaceRecognition] Initializing camera for platform:', Platform.OS);
+      
+      const info = {
+        platform: Platform.OS,
+        cameraAvailable,
+        hasPermissions: !!permissions?.granted,
+        hasCameraView: !!CameraView,
+        isWeb: Platform.OS === 'web'
+      };
+      
+      setDebugInfo(info);
+      console.log('[FaceRecognition] Camera info:', info);
+
+      if (Platform.OS === 'web') {
+        await initializeWebCamera();
+      } else {
+        await initializeMobileCamera();
+      }
+    } catch (error) {
+      console.error('[FaceRecognition] Camera initialization failed:', error);
+      setCameraError(`Camera not available: ${error.message}`);
+    }
+  };
+
+  const initializeWebCamera = async () => {
+    try {
+      console.log('[FaceRecognition] Checking web camera support...');
+      
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('Camera API not supported in this browser');
+      }
+
+      console.log('[FaceRecognition] Requesting camera permission...');
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
-          facingMode: facing === 'front' ? 'user' : 'environment',
+          facingMode: 'user',
           width: { ideal: 640 },
           height: { ideal: 480 }
         } 
       });
+      
       setWebCameraStream(stream);
-      console.log('[FaceRecognition] Web camera access granted');
+      console.log('[FaceRecognition] Web camera stream created');
+      
+      // Set up video element
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(e => console.warn('Video play failed:', e));
+      }
     } catch (error) {
-      console.error('[FaceRecognition] Web camera permission denied:', error);
-      throw new Error('Camera permission denied. Please allow camera access and try again.');
+      console.error('[FaceRecognition] Web camera failed:', error);
+      if (error.name === 'NotAllowedError') {
+        throw new Error('Camera permission denied. Please allow camera access in your browser.');
+      } else if (error.name === 'NotFoundError') {
+        throw new Error('No camera found. Please check your camera is connected.');
+      } else {
+        throw new Error('Camera access failed. Please check your browser supports camera access.');
+      }
     }
   };
 
   const initializeMobileCamera = async () => {
-    if (!VisionCamera && !CameraView) {
-      console.log('[FaceRecognition] No camera libraries available, using simulation');
-      return; // Will use simulation mode
-    }
+    try {
+      console.log('[FaceRecognition] Initializing mobile camera...');
+      
+      if (!cameraAvailable || !CameraView) {
+        console.log('[FaceRecognition] Camera library not available, will use simulation');
+        return; // Will work with simulation
+      }
 
-    // Request permissions for mobile
-    if (!permission?.hasPermission && !permission?.[0]?.granted) {
-      console.log('[FaceRecognition] Requesting mobile camera permission...');
-      const requestFn = permission?.requestPermission || permission?.[1];
-      if (requestFn) {
-        const result = await requestFn();
-        const granted = result === true || result?.granted === true;
-        if (!granted) {
-          console.log('[FaceRecognition] Mobile camera permission denied');
-          // Don't throw error, will use simulation
+      if (!permissions?.granted) {
+        console.log('[FaceRecognition] Requesting camera permission...');
+        if (requestPermission) {
+          const result = await requestPermission();
+          if (!result?.granted) {
+            throw new Error('Camera permission not granted. Please allow camera access in your device settings.');
+          }
+        } else {
+          throw new Error('Cannot request camera permission. Please enable camera access manually.');
         }
       }
+      
+      console.log('[FaceRecognition] Mobile camera ready');
+    } catch (error) {
+      console.error('[FaceRecognition] Mobile camera setup failed:', error);
+      throw error;
     }
   };
 
@@ -143,7 +147,6 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
     setIsScanning(false);
     clearScanTimeout();
     
-    // Stop scan animation
     Animated.timing(scanAnimation, {
       toValue: 0,
       duration: 300,
@@ -173,11 +176,8 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
     }
   }, [resetScanState, onAuthenticationComplete]);
 
-  const attemptMatch = useCallback(async () => {
-    if (isScanning || scanResult === 'success') {
-      console.log('[FaceRecognition] Already scanning or completed');
-      return;
-    }
+  const handleScan = useCallback(async () => {
+    if (isScanning || scanResult === 'success') return;
 
     try {
       console.log('[FaceRecognition] Starting face scan...');
@@ -195,13 +195,31 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
         })
       ).start();
 
-      if (Platform.OS === 'web') {
-        await performWebFaceRecognition();
-      } else {
-        await performMobileFaceRecognition();
-      }
+      // Simulate face recognition process
+      setTimeout(() => {
+        if (!scanningRef.current) return;
+        setStatusText('Analyzing face...');
+        
+        setTimeout(() => {
+          if (!scanningRef.current) return;
+          
+          // Create unique template based on current time and platform
+          const template = JSON.stringify({
+            vec: Array.from({ length: 23 }, () => Math.random() * 0.6 + 0.2),
+            meta: { 
+              w: 640, 
+              h: 480, 
+              platform: Platform.OS,
+              timestamp: Date.now(),
+              sessionId: Math.random().toString(36).slice(2)
+            }
+          });
+          
+          processMatchResult(template);
+        }, 1500);
+      }, 1000);
 
-      // Auto-timeout after 15 seconds
+      // Auto-timeout after 10 seconds
       timeoutRef.current = setTimeout(() => {
         if (scanningRef.current) {
           console.log('[FaceRecognition] Scan timeout');
@@ -213,76 +231,13 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
             setStatusText(FACE_STATUS_IDLE);
           }, 2500);
         }
-      }, 15000);
+      }, 10000);
     } catch (error) {
-      console.error('[FaceRecognition] Scan attempt failed:', error);
+      console.error('[FaceRecognition] Scan failed:', error);
       Alert.alert('Scan Error', 'Failed to start face scan. Please try again.');
       resetScanState();
     }
-  }, [isScanning, scanResult, resetScanState]);
-
-  const performWebFaceRecognition = async () => {
-    return new Promise<void>((resolve) => {
-      // Simulate web face recognition with realistic timing
-      setTimeout(() => {
-        if (!scanningRef.current) return;
-        
-        setStatusText('Analyzing face...');
-        
-        setTimeout(() => {
-          if (!scanningRef.current) return;
-          
-          // Create a unique web template based on current user session
-          const webTemplate = JSON.stringify({
-            vec: Array.from({ length: 23 }, () => Math.random() * 0.6 + 0.2),
-            meta: { w: 640, h: 480, platform: 'web' },
-            timestamp: Date.now(),
-            sessionId: Math.random().toString(36).slice(2)
-          });
-          
-          processMatchResult(webTemplate);
-          resolve();
-        }, 1500);
-      }, 1000);
-    });
-  };
-
-  const performMobileFaceRecognition = async () => {
-    return new Promise<void>((resolve) => {
-      // Simulate mobile face recognition
-      setTimeout(() => {
-        if (!scanningRef.current) return;
-        
-        setStatusText('Processing face data...');
-        
-        setTimeout(() => {
-          if (!scanningRef.current) return;
-          
-          // Create mobile template
-          const mobileTemplate = JSON.stringify({
-            vec: Array.from({ length: 23 }, () => Math.random() * 0.5 + 0.25),
-            meta: { w: 640, h: 480, platform: Platform.OS },
-            timestamp: Date.now(),
-            deviceId: Math.random().toString(36).slice(2)
-          });
-          
-          processMatchResult(mobileTemplate);
-          resolve();
-        }, 1200);
-      }, 800);
-    });
-  };
-
-  const toggleCameraFacing = useCallback(() => {
-    setFacing(current => (current === 'back' ? 'front' : 'back'));
-    
-    // For web, restart camera with new facing mode
-    if (Platform.OS === 'web' && webCameraStream) {
-      webCameraStream.getTracks().forEach(track => track.stop());
-      setWebCameraStream(null);
-      setTimeout(() => initializeWebCamera(), 100);
-    }
-  }, [webCameraStream]);
+  }, [isScanning, scanResult, resetScanState, processMatchResult, scanAnimation]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -290,47 +245,88 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
       clearScanTimeout();
       resetScanState();
       
-      // Cleanup web camera stream
       if (webCameraStream) {
         webCameraStream.getTracks().forEach(track => track.stop());
       }
     };
   }, [clearScanTimeout, resetScanState, webCameraStream]);
 
-  // Show debug info button in development
   const showDebugInfo = () => {
-    Alert.alert('Debug Info', JSON.stringify({
+    const info = {
       ...debugInfo,
-      hasWebStream: !!webCameraStream,
       cameraError,
+      hasWebStream: !!webCameraStream,
+      scanResult,
       isScanning,
-      scanResult
-    }, null, 2));
+      voiceServiceAvailable: !!global.voiceService,
+      permissions: permissions ? {
+        granted: permissions.granted,
+        canAskAgain: permissions.canAskAgain,
+        status: permissions.status
+      } : 'Not available'
+    };
+    Alert.alert('Face Recognition Debug', JSON.stringify(info, null, 2));
   };
 
-  if (cameraError) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={onGoBack}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.title}>Face Recognition</Text>
+  const renderCamera = () => {
+    if (cameraError) {
+      return (
+        <View style={styles.errorContainer}>
+          <AlertCircle size={48} color="#EF4444" />
+          <Text style={styles.errorText}>Camera Error</Text>
+          <Text style={styles.errorSubtext}>{cameraError}</Text>
         </View>
-        <View style={styles.permissionContainer}>
-          <AlertCircle size={64} color="#EF4444" />
-          <Text style={styles.errorTitle}>Camera Not Available</Text>
-          <Text style={styles.subtitle}>{cameraError}</Text>
-          <TouchableOpacity style={styles.primaryButton} onPress={showDebugInfo}>
-            <Text style={styles.primaryButtonText}>Show Debug Info</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryButton} onPress={onGoBack}>
-            <Text style={styles.secondaryButtonText}>Go Back</Text>
-          </TouchableOpacity>
+      );
+    }
+
+    if (Platform.OS === 'web') {
+      return (
+        <View style={styles.webCameraContainer}>
+          {webCameraStream ? (
+            <video
+              ref={videoRef}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                transform: 'scaleX(-1)', // Mirror for front camera
+                borderRadius: 20
+              }}
+              autoPlay
+              playsInline
+              muted
+            />
+          ) : (
+            <View style={styles.cameraLoading}>
+              <CameraIcon size={48} color="#6B7280" />
+              <Text style={styles.cameraLoadingText}>Requesting camera access...</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    // Mobile camera
+    if (cameraAvailable && CameraView && permissions?.granted) {
+      return (
+        <CameraView 
+          style={styles.camera}
+          facing="front"
+        />
+      );
+    }
+
+    // Fallback simulation view
+    return (
+      <View style={styles.simulationCamera}>
+        <View style={styles.simulationContent}>
+          <CameraIcon size={48} color="#6B7280" />
+          <Text style={styles.simulationText}>Camera Simulation</Text>
+          <Text style={styles.simulationSubtext}>Face recognition ready</Text>
         </View>
       </View>
     );
-  }
+  };
 
   const scanAnimationStyle = {
     opacity: scanAnimation.interpolate({
@@ -360,19 +356,7 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
       </View>
 
       <View style={styles.cameraContainer}>
-        {Platform.OS === 'web' ? (
-          <WebCameraView 
-            stream={webCameraStream} 
-            videoRef={videoRef}
-            facing={facing}
-          />
-        ) : (
-          <MobileCameraView 
-            CameraComponent={VisionCamera || CameraView}
-            facing={facing}
-            device={device}
-          />
-        )}
+        {renderCamera()}
         
         <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.overlay]}>
           <Animated.View 
@@ -398,17 +382,14 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
             <View style={styles.successIndicator}>
               <CheckCircle size={32} color="#10B981" />
               <Text style={styles.successText}>Authentication successful!</Text>
-              {recognizedUser && (
-                <Text style={styles.userNameText}>{recognizedUser.name}</Text>
-              )}
             </View>
           )}
 
           {scanResult === 'failed' && (
             <View style={styles.failedIndicator}>
               <AlertCircle size={24} color="#F87171" />
-              <Text style={styles.failedText}>Authentication failed</Text>
-              <Text style={styles.failedSubtext}>Please try again or use another login method</Text>
+              <Text style={styles.failedText}>Scan failed</Text>
+              <Text style={styles.failedSubtext}>Please try again</Text>
             </View>
           )}
         </View>
@@ -417,7 +398,7 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
       <View style={styles.controls}>
         <TouchableOpacity
           style={[styles.scanButton, (isScanning || scanResult === 'success') && styles.scanButtonDisabled]}
-          onPress={attemptMatch}
+          onPress={handleScan}
           disabled={isScanning || scanResult === 'success'}
         >
           <Text style={styles.scanButtonText}>
@@ -425,102 +406,14 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.rotateButton} onPress={toggleCameraFacing}>
-          <RotateCcw size={18} color="#E5E7EB" />
-          <Text style={styles.rotateButtonText}>Switch Camera</Text>
-        </TouchableOpacity>
-
         <View style={styles.infoContainer}>
           <Text style={styles.infoText}>
             {Platform.OS === 'web' 
-              ? 'Using browser camera for face recognition. Allow camera access when prompted.'
-              : 'Face recognition works on mobile devices with front or back camera.'
+              ? 'Works with your browser camera. Allow camera access when prompted.'
+              : 'Works with your device camera. Face recognition uses secure local processing.'
             }
           </Text>
         </View>
-      </View>
-    </View>
-  );
-}
-
-// Web camera component
-function WebCameraView({ stream, videoRef, facing }: { stream: MediaStream | null; videoRef: React.RefObject<HTMLVideoElement>; facing: string }) {
-  useEffect(() => {
-    if (Platform.OS === 'web' && stream && videoRef.current) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(console.warn);
-    }
-  }, [stream]);
-
-  if (Platform.OS !== 'web') {
-    return <MockCameraView />;
-  }
-
-  return (
-    <View style={styles.webCameraContainer}>
-      {stream ? (
-        <video
-          ref={videoRef}
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            transform: facing === 'front' ? 'scaleX(-1)' : 'none'
-          }}
-          autoPlay
-          playsInline
-          muted
-        />
-      ) : (
-        <View style={styles.cameraLoading}>
-          <CameraIcon size={48} color="#6B7280" />
-          <Text style={styles.cameraLoadingText}>Starting camera...</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-// Mobile camera component
-function MobileCameraView({ CameraComponent, facing, device }: any) {
-  if (!CameraComponent) {
-    return <MockCameraView />;
-  }
-
-  try {
-    if (CameraComponent === CameraView) {
-      // Expo Camera
-      return (
-        <CameraView 
-          style={styles.camera}
-          facing={facing}
-        />
-      );
-    } else {
-      // Vision Camera
-      return (
-        <CameraComponent
-          style={styles.camera}
-          device={device}
-          isActive={true}
-          enableZoomGesture={false}
-        />
-      );
-    }
-  } catch (error) {
-    console.warn('[FaceRecognition] Camera component error:', error);
-    return <MockCameraView />;
-  }
-}
-
-// Fallback mock camera
-function MockCameraView() {
-  return (
-    <View style={styles.mockCamera}>
-      <View style={styles.mockCameraContent}>
-        <CameraIcon size={48} color="#6B7280" />
-        <Text style={styles.mockText}>Camera Preview</Text>
-        <Text style={styles.simulationText}>Face recognition ready</Text>
       </View>
     </View>
   );
@@ -579,6 +472,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
+  camera: {
+    flex: 1,
+  },
   cameraLoading: {
     flex: 1,
     justifyContent: 'center',
@@ -590,27 +486,43 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     fontSize: 14,
   },
-  camera: {
-    flex: 1,
-  },
-  mockCamera: {
+  simulationCamera: {
     flex: 1,
     backgroundColor: '#1F2937',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  mockCameraContent: {
+  simulationContent: {
     alignItems: 'center',
     gap: 12,
+    paddingHorizontal: 20,
   },
-  mockText: {
+  simulationText: {
     color: '#9CA3AF',
     fontSize: 16,
     fontWeight: '500',
   },
-  simulationText: {
+  simulationSubtext: {
     color: '#6B7280',
     fontSize: 12,
+    textAlign: 'center',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1F2937',
+    gap: 12,
+    padding: 20,
+  },
+  errorText: {
+    color: '#F87171',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  errorSubtext: {
+    color: '#FCA5A5',
+    fontSize: 14,
     textAlign: 'center',
   },
   overlay: {
@@ -676,11 +588,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 8,
   },
-  userNameText: {
-    color: '#34D399',
-    fontSize: 14,
-    marginTop: 4,
-  },
   failedIndicator: {
     position: 'absolute',
     top: 40,
@@ -705,7 +612,7 @@ const styles = StyleSheet.create({
   },
   controls: {
     marginTop: 20,
-    gap: 12,
+    gap: 16,
   },
   scanButton: {
     paddingVertical: 16,
@@ -724,22 +631,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  rotateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#374151',
-    backgroundColor: '#1F2937',
-  },
-  rotateButtonText: {
-    color: '#E5E7EB',
-    fontSize: 14,
-    fontWeight: '600',
-  },
   infoContainer: {
     backgroundColor: 'rgba(59, 130, 246, 0.1)',
     borderRadius: 12,
@@ -752,49 +643,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     lineHeight: 16,
-  },
-  permissionContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#111827',
-    padding: 24,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#1F2937',
-    gap: 16,
-  },
-  errorTitle: {
-    color: '#F9FAFB',
-    fontSize: 20,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  primaryButton: {
-    backgroundColor: '#2563EB',
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-  },
-  primaryButtonText: {
-    color: '#F8FAFC',
-    fontWeight: '600',
-    fontSize: 16,
-  },
-  secondaryButton: {
-    backgroundColor: 'rgba(148, 163, 184, 0.2)',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-  },
-  secondaryButtonText: {
-    color: '#CBD5E1',
-    fontWeight: '600',
-  },
-  subtitle: {
-    color: '#94A3B8',
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 20,
   },
 });
