@@ -21,7 +21,6 @@
         "NSLocalNetworkUsageDescription": "This app needs local network access to communicate with smart home devices."
       },
       "bundleIdentifier": "com.anonymous.fawzinoiot",
-      "deploymentTarget": "15.1",
       "requireFullScreen": false
     },
     "android": {
@@ -57,9 +56,10 @@
           },
           "ios": {
             "deploymentTarget": "15.1"
-          "deploymentTarget": "15.1",
-          "infoPlist": {
-            "NSCameraUsageDescription": "This app needs camera access for face recognition features."
+            "deploymentTarget": "15.1",
+            "infoPlist": {
+              "NSCameraUsageDescription": "This app needs camera access for face recognition features."
+            }
           }
         }
       ]
