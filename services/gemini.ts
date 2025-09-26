@@ -1,6 +1,7 @@
 // Simple Google Gemini API client for Expo/React Native
 
 import { parseLocalCommand } from './local-parser';
+import { getErrorMessage } from '../utils/errors';
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
@@ -30,7 +31,10 @@ function normalizeModelName(model: string | undefined | null, fallback = 'models
 
 const GEMINI_API_VERSION = (process.env?.EXPO_PUBLIC_GEMINI_API_VERSION || 'v1').trim();
 
-const PRIMARY_MODEL = normalizeModelName(process.env?.EXPO_PUBLIC_GEMINI_MODEL, normalizeModelName(undefined));
+const PRIMARY_MODEL = normalizeModelName(
+  process.env?.EXPO_PUBLIC_GEMINI_MODEL,
+  normalizeModelName('gemini-1.5-flash-latest')
+);
 const FALLBACK_MODELS = [
   normalizeModelName('gemini-1.5-pro'),
   normalizeModelName('gemini-1.5-flash'),
@@ -38,6 +42,29 @@ const FALLBACK_MODELS = [
   normalizeModelName('gemini-1.5-flash-latest'),
 ];
 const GEMINI_MODELS = Array.from(new Set([PRIMARY_MODEL, ...FALLBACK_MODELS]));
+
+type GeminiRequestPart = {
+  text: string;
+};
+
+type GeminiRequestContent = {
+  role: string;
+  parts: GeminiRequestPart[];
+};
+
+type GeminiRequestBody = {
+  contents: GeminiRequestContent[];
+  generationConfig?: {
+    temperature?: number;
+    topP?: number;
+    maxOutputTokens?: number;
+    candidateCount?: number;
+  };
+};
+
+type GeminiApiResult =
+  | { success: true; data: any }
+  | { success: false; status?: number; error?: string };
 
 const getGeminiEndpoint = (model: string) => `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/${model}:generateContent`;
 
@@ -54,7 +81,11 @@ function buildAssistantUrl() {
 const ASSISTANT_URL = buildAssistantUrl();
 
 function getApiKey() {
-  return 'AIzaSyBRh6UuOX94G9u5or5o1lBb-r-QP96Q3kw';
+  const key =
+    process.env?.EXPO_PUBLIC_GEMINI_API_KEY?.trim() ||
+    process.env?.GEMINI_API_KEY?.trim();
+
+  return key || '';
 }
 
 function cleanAssistantSpeech(text: string): string {
@@ -96,7 +127,7 @@ function interpretGeminiError(lastError: unknown): string | null {
   return null;
 }
 
-async function tryGeminiModel(model, body, apiKey) {
+async function tryGeminiModel(model: string, body: GeminiRequestBody, apiKey: string): Promise<GeminiApiResult> {
   console.log(`[Gemini] Trying model: ${model}`);
   const endpoint = getGeminiEndpoint(model);
   
@@ -301,7 +332,7 @@ function extractAssistantCommand(partText: string): { payload: Record<string, an
       try {
         payload = JSON.parse(candidate);
         remainder = (trimmed.slice(0, block.start) + trimmed.slice(block.end)).trim();
-      } catch (error) {
+      } catch {
         payload = null;
       }
     }
@@ -361,8 +392,8 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
       if (data?.error) {
         return { say: String(data.error).trim(), action: 'none' };
       }
-    } catch (error: any) {
-      console.log('[gemini] backend call failed, falling back to direct API:', error?.message || error);
+    } catch (error: unknown) {
+      console.log('[gemini] backend call failed, falling back to direct API:', getErrorMessage(error));
     }
   }
 
@@ -373,13 +404,13 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
     return { say: 'Assistant service unavailable (no API key).', action: 'none' };
   }
 
-  const contents = [] as any[];
+  const contents: GeminiRequestContent[] = [];
   for (const m of history) {
     contents.push({ role: m.role, parts: [{ text: m.content }] });
   }
   contents.push({ role: 'user', parts: [{ text: buildPrompt(userText) }] });
 
-  const body = {
+  const body: GeminiRequestBody = {
     contents,
     generationConfig: { 
       temperature: 0.2, 
@@ -392,7 +423,7 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   console.log('[Gemini] Making API request to Google');
   
   // Implement retry with exponential backoff for quota errors
-  const retryWithBackoff = async (model, attempt = 1) => {
+  const retryWithBackoff = async (model: string, attempt = 1): Promise<GeminiApiResult> => {
     const result = await tryGeminiModel(model, body, apiKey);
     
     if (!result.success && result.status === 429 && attempt < 3) {
@@ -406,7 +437,7 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
   };
 
   // Try models in order until one works
-  let lastError = null;
+  let lastError: unknown = null;
   for (const model of GEMINI_MODELS) {
     try {
       const result = await retryWithBackoff(model);
@@ -442,9 +473,9 @@ export async function askGemini(userText: string, history: ChatMessage[] = []): 
         };
       }
       lastError = result.error;
-    } catch (error) {
+    } catch (error: unknown) {
       console.log(`[Gemini] Exception with model ${model}:`, error);
-      lastError = error.message || String(error);
+      lastError = getErrorMessage(error);
     }
   }
 

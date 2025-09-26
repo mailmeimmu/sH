@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, RefreshControl } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, RefreshControl, Platform } from 'react-native';
 import { Screen, Container, SectionCard } from '../../components/Layout';
 import { Home as HomeIcon, Lightbulb, Fan as FanIcon, Thermometer, Zap, Mic, Lock, Unlock, LogOut, Volume2 } from 'lucide-react-native';
 import { router } from 'expo-router';
@@ -8,6 +8,7 @@ import remoteApi, { type DeviceState } from '../../services/remote';
 import theme from '../../theme';
 import { voiceService } from '../../services/voice';
 import { askGemini } from '../../services/gemini';
+import { getErrorMessage } from '../../utils/errors';
 import InfoBanner from '../../components/InfoBanner';
 
 type DeviceType = 'light' | 'fan' | 'ac';
@@ -198,8 +199,9 @@ export default function HomeControlScreen() {
         if (db.can('voice.use')) {
           await voiceService.requestPermissions();
         }
-      } catch (error) {
-        console.warn('[Home] Voice init error:', error?.message || error);
+      } catch (error: unknown) {
+        const message = getErrorMessage(error);
+        console.warn('[Home] Voice init error:', message, error);
         // Continue without voice if it fails
       }
     };
@@ -229,9 +231,10 @@ export default function HomeControlScreen() {
       if (result?.transcript) {
         await handleAssistantText(result.transcript);
       }
-    } catch (e) {
+    } catch (error: unknown) {
       setVaListening(false);
-      console.warn('[Home] Assistant listening error:', e?.message || e);
+      const message = getErrorMessage(error);
+      console.warn('[Home] Assistant listening error:', message, error);
     } finally {
     }
   };
@@ -265,8 +268,9 @@ export default function HomeControlScreen() {
     const nextOn = !deviceStates[device.id];
     try {
       await updateDeviceState(device.id, nextOn);
-    } catch (e: any) {
-      Alert.alert('Device', e?.message || 'Failed to update device state.');
+    } catch (error: unknown) {
+      const message = getErrorMessage(error) || 'Failed to update device state.';
+      Alert.alert('Device', message);
     }
   }, [deviceStates, updateDeviceState]);
 
@@ -347,8 +351,9 @@ export default function HomeControlScreen() {
                 db.setDoorState(door, finalLocked);
                 await voiceService.speak(reply.say || (finalLocked ? 'Door locked.' : 'Door unlocked.'));
                 handled = true;
-              } catch (error: any) {
-                console.warn('[Assistant] remote door toggle failed', error?.message || error);
+              } catch (error: unknown) {
+                const message = getErrorMessage(error);
+                console.warn('[Assistant] remote door toggle failed', message, error);
               }
             }
 
@@ -380,8 +385,9 @@ export default function HomeControlScreen() {
                   db.setDoorStates(nextState);
                   await voiceService.speak(reply.say || 'All doors locked.');
                   handled = true;
-                } catch (error: any) {
-                  console.warn('[Assistant] remote lock all failed', error?.message || error);
+                } catch (error: unknown) {
+                  const message = getErrorMessage(error);
+                  console.warn('[Assistant] remote lock all failed', message, error);
                 }
               }
               if (!handled) {
@@ -407,8 +413,9 @@ export default function HomeControlScreen() {
                   db.setDoorStates(nextState);
                   await voiceService.speak(reply.say || 'All doors unlocked.');
                   handled = true;
-                } catch (error: any) {
-                  console.warn('[Assistant] remote unlock all failed', error?.message || error);
+                } catch (error: unknown) {
+                  const message = getErrorMessage(error);
+                  console.warn('[Assistant] remote unlock all failed', message, error);
                 }
               }
               if (!handled) {
@@ -429,8 +436,8 @@ export default function HomeControlScreen() {
       } else {
         await voiceService.speak(reply.say || 'Okay.');
       }
-    } catch (e) {
-      console.warn('[Voice] interpretation failed', e);
+    } catch (error: unknown) {
+      console.warn('[Voice] interpretation failed', getErrorMessage(error), error);
     }
   };
 
@@ -471,8 +478,8 @@ export default function HomeControlScreen() {
           next[name] = locked;
           return next;
         });
-      } catch (e: any) {
-        Alert.alert('Door', e?.message || 'Failed to toggle door');
+      } catch (error: unknown) {
+        Alert.alert('Door', getErrorMessage(error) || 'Failed to toggle door');
       }
     } else {
       const res = db.toggleDoor(name);
@@ -497,8 +504,8 @@ export default function HomeControlScreen() {
         const nextState = createDoorState(true);
         db.setDoorStates(nextState);
         setDoors(nextState);
-      } catch (e: any) {
-        Alert.alert('Door', e?.message || 'Failed to lock doors');
+      } catch (error: unknown) {
+        Alert.alert('Door', getErrorMessage(error) || 'Failed to lock doors');
       }
     } else {
       db.lockAllDoors();
@@ -513,8 +520,8 @@ export default function HomeControlScreen() {
         const nextState = createDoorState(false);
         db.setDoorStates(nextState);
         setDoors(nextState);
-      } catch (e: any) {
-        Alert.alert('Door', e?.message || 'Failed to unlock doors');
+      } catch (error: unknown) {
+        Alert.alert('Door', getErrorMessage(error) || 'Failed to unlock doors');
       }
     } else {
       const res = db.unlockAllDoors();

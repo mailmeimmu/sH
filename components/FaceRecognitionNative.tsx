@@ -1,9 +1,22 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform, Animated } from 'react-native';
 import { Camera as CameraIcon, CircleCheck as CheckCircle, AlertCircle } from 'lucide-react-native';
+import { getErrorMessage, toError } from '../utils/errors';
 
 // Safe camera imports with better error handling
-let CameraView, useCameraPermissions;
+type CameraPermissionResponse = {
+  granted?: boolean;
+  canAskAgain?: boolean;
+  expires?: string;
+  status?: string;
+  error?: string;
+  [key: string]: any;
+};
+
+type UseCameraPermissionsHook = () => [CameraPermissionResponse | null, (() => Promise<CameraPermissionResponse>)?];
+
+let CameraView: ComponentType<any> | undefined;
+let useCameraPermissions: UseCameraPermissionsHook | undefined;
 let cameraAvailable = false;
 
 try {
@@ -12,8 +25,8 @@ try {
   useCameraPermissions = expoCamera.useCameraPermissions;
   cameraAvailable = true;
   console.log('[FaceRecognition] expo-camera loaded successfully');
-} catch (error) {
-  console.log('[FaceRecognition] expo-camera not available:', error.message);
+} catch (error: unknown) {
+  console.log('[FaceRecognition] expo-camera not available:', getErrorMessage(error));
   cameraAvailable = false;
 }
 
@@ -30,11 +43,13 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
   const [statusText, setStatusText] = useState(FACE_STATUS_IDLE);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [webCameraStream, setWebCameraStream] = useState<MediaStream | null>(null);
-  const [permissions, requestPermission] = useCameraPermissions ? useCameraPermissions() : [null, null];
+  const cameraPermissions = useCameraPermissions?.() ?? [null, undefined];
+  const permissions = cameraPermissions[0] as CameraPermissionResponse | null;
+  const requestPermission = cameraPermissions[1] as (() => Promise<CameraPermissionResponse>) | undefined;
   const [debugInfo, setDebugInfo] = useState<any>({});
 
   const scanningRef = useRef(false);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Animation for scanning effect
@@ -64,9 +79,9 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
       } else {
         await initializeMobileCamera();
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRecognition] Camera initialization failed:', error);
-      setCameraError(`Camera not available: ${error.message}`);
+      setCameraError(`Camera not available: ${getErrorMessage(error)}`);
     }
   };
 
@@ -95,15 +110,16 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
         videoRef.current.srcObject = stream;
         videoRef.current.play().catch(e => console.warn('Video play failed:', e));
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRecognition] Web camera failed:', error);
-      if (error.name === 'NotAllowedError') {
+      const err = toError(error);
+      if (err.name === 'NotAllowedError') {
         throw new Error('Camera permission denied. Please allow camera access in your browser.');
-      } else if (error.name === 'NotFoundError') {
-        throw new Error('No camera found. Please check your camera is connected.');
-      } else {
-        throw new Error('Camera access failed. Please check your browser supports camera access.');
       }
+      if (err.name === 'NotFoundError') {
+        throw new Error('No camera found. Please check your camera is connected.');
+      }
+      throw new Error('Camera access failed. Please check your browser supports camera access.');
     }
   };
 
@@ -129,7 +145,7 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
       }
       
       console.log('[FaceRecognition] Mobile camera ready');
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRecognition] Mobile camera setup failed:', error);
       throw error;
     }
@@ -163,7 +179,7 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
       setTimeout(() => {
         onAuthenticationComplete(true, { template: templateStr });
       }, 1200);
-    } catch (error) {
+    } catch (error: unknown) {
       console.warn('[FaceRecognition] Face match error:', error);
       setScanResult('failed');
       setStatusText('Authentication failed. Please try again.');
@@ -232,7 +248,7 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
           }, 2500);
         }
       }, 10000);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRecognition] Scan failed:', error);
       Alert.alert('Scan Error', 'Failed to start face scan. Please try again.');
       resetScanState();
@@ -258,7 +274,7 @@ export default function FaceRecognitionNative({ onAuthenticationComplete, onGoBa
       hasWebStream: !!webCameraStream,
       scanResult,
       isScanning,
-      voiceServiceAvailable: !!global.voiceService,
+      voiceServiceAvailable: Boolean((globalThis as { voiceService?: unknown }).voiceService),
       permissions: permissions ? {
         granted: permissions.granted,
         canAskAgain: permissions.canAskAgain,

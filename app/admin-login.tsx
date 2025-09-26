@@ -7,6 +7,19 @@ import remoteApi from '../services/remote';
 import { db } from '../services/database';
 import theme from '../theme';
 
+type AdminLoginSuccess = {
+  success: true;
+  user: any;
+  token?: string | null;
+};
+
+type AdminLoginFailure = {
+  success: false;
+  error: string;
+};
+
+type AdminLoginResult = AdminLoginSuccess | AdminLoginFailure;
+
 export default function AdminLoginScreen() {
   const [email, setEmail] = useState('');
   const [pin, setPin] = useState('');
@@ -37,14 +50,14 @@ export default function AdminLoginScreen() {
       console.log('[AdminLogin] Starting authentication process');
       
       // Try local authentication first
-      const localResult = await db.authenticateAdmin(email.trim(), pin.trim());
+      const localResult = await db.authenticateAdmin(email.trim(), pin.trim()) as AdminLoginResult;
       console.log('[AdminLogin] Local auth result:', localResult);
       
-      let loginResult = null;
+      let loginResult: AdminLoginResult | null = null;
       if (remoteApi.enabled) {
         try {
           console.log('[AdminLogin] Trying remote admin login');
-          loginResult = await remoteApi.adminLogin(email.trim(), pin.trim());
+          loginResult = await remoteApi.adminLogin(email.trim(), pin.trim()) as AdminLoginResult;
           console.log('[AdminLogin] Remote login result:', loginResult);
         } catch (error) {
           console.log('[AdminLogin] Remote login failed, trying local fallback:', (error as any)?.message || error);
@@ -55,11 +68,12 @@ export default function AdminLoginScreen() {
         loginResult = localResult;
       }
       
-      if (loginResult && loginResult.success && loginResult.user && loginResult.token) {
+      if (loginResult && loginResult.success && loginResult.user) {
+        const token = 'token' in loginResult ? loginResult.token ?? null : null;
         console.log('[AdminLogin] Login successful, setting session');
-        const sessionData = { ...loginResult.user, token: loginResult.token };
+        const sessionData = { ...loginResult.user, token };
         db.setAdminSession(sessionData);
-        remoteApi.setAdminToken(loginResult.token);
+        remoteApi.setAdminToken(token);
         console.log('[AdminLogin] Navigating to admin users');
         router.replace('/admin-users');
       } else {

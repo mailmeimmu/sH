@@ -5,6 +5,7 @@ import { voiceService } from '../../services/voice';
 import { askGemini, type GeminiAssistantReply, type ChatMessage } from '../../services/gemini';
 import { db } from '../../services/database';
 import remoteApi from '../../services/remote';
+import { getErrorMessage } from '../../utils/errors';
 
 type ConversationEntry = { type: 'user' | 'assistant'; message: string };
 
@@ -143,9 +144,10 @@ export default function VoiceControlScreen() {
             setVoiceError('Voice recognition not available - using simulation mode');
           }
         }
-      } catch (error) {
-        console.warn('[Voice] Voice service init error:', error?.message || error);
-        setVoiceError(error?.message || 'Voice service failed to initialize');
+      } catch (error: unknown) {
+        const message = getErrorMessage(error) || 'Voice service failed to initialize';
+        console.warn('[Voice] Voice service init error:', message, error);
+        setVoiceError(message);
       }
     };
     
@@ -154,7 +156,7 @@ export default function VoiceControlScreen() {
     return () => {
       try {
         voiceService.destroy();
-      } catch (error) {
+      } catch (error: unknown) {
         console.warn('[Voice] Cleanup error:', error);
       }
     };
@@ -217,10 +219,10 @@ export default function VoiceControlScreen() {
             addAssistantMessage('I didn\'t catch that. Please try speaking again or use the text input below.');
           }
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           setIsListening(false);
           console.log('[Voice] Recognition error:', error);
-          const errorMsg = error?.message || String(error);
+          const errorMsg = getErrorMessage(error);
           setVoiceError(errorMsg);
           
           if (errorMsg.includes('permission')) {
@@ -235,10 +237,10 @@ export default function VoiceControlScreen() {
             addAssistantMessage(`Voice error: ${errorMsg}. Please try typing your message below instead.`);
           }
         });
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[Voice] Start listening exception:', error);
       setIsListening(false);
-      setVoiceError(error?.message || 'Voice service failed');
+      setVoiceError(getErrorMessage(error) || 'Voice service failed');
       Alert.alert('Voice Error', 'Voice recognition failed. Please try typing your command instead.');
     }
   };
@@ -246,7 +248,7 @@ export default function VoiceControlScreen() {
   const stopListening = () => {
     try {
       voiceService.stopListening();
-    } catch (error) {
+    } catch (error: unknown) {
       console.warn('[Voice] Stop listening error:', error);
     }
     setIsListening(false);
@@ -257,7 +259,7 @@ export default function VoiceControlScreen() {
     setIsSpeaking(true);
     try {
       if (speakEnabled) await voiceService.speak(text);
-    } catch (error) {
+    } catch (error: unknown) {
       console.log('Speech synthesis error:', error);
     } finally {
       setIsListening(false);
@@ -359,7 +361,7 @@ export default function VoiceControlScreen() {
           console.log(`[Voice] Local mode: Setting ${deviceIds.join(', ')} to ${desired}`);
         }
         successful.push(getRoomDisplayName(room));
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error(`[Voice] Failed to control ${deviceType} in ${room}:`, error);
         errors.push(getRoomDisplayName(room));
       }
@@ -414,9 +416,9 @@ export default function VoiceControlScreen() {
             }
             console.log(`[Voice] Door ${doorKey} ${desiredLock ? 'locked' : 'unlocked'} successfully`);
             return reply.say || (desiredLock ? 'Door locked.' : 'Door unlocked.');
-          } catch (error: any) {
+          } catch (error: unknown) {
             console.error(`[Voice] Failed to control door ${doorKey}:`, error);
-            return error?.message || 'Failed to update the door state.';
+            return getErrorMessage(error) || 'Failed to update the door state.';
           }
         } else {
           // Local mode
@@ -456,9 +458,9 @@ export default function VoiceControlScreen() {
           try {
             await remoteApi.lockAllDoors();
             console.log('[Voice] All doors locked successfully (remote)');
-          } catch (error: any) {
+          } catch (error: unknown) {
             console.error('[Voice] Failed to lock all doors:', error);
-            return error?.message || 'Failed to lock all doors.';
+            return getErrorMessage(error) || 'Failed to lock all doors.';
           }
         } else {
           const res = db.lockAllDoors();
@@ -478,9 +480,9 @@ export default function VoiceControlScreen() {
           try {
             await remoteApi.unlockAllDoors();
             console.log('[Voice] All doors unlocked successfully (remote)');
-          } catch (error: any) {
+          } catch (error: unknown) {
             console.error('[Voice] Failed to unlock all doors:', error);
-            return error?.message || 'Failed to unlock all doors.';
+            return getErrorMessage(error) || 'Failed to unlock all doors.';
           }
         } else {
           const res = db.unlockAllDoors();
@@ -555,9 +557,10 @@ export default function VoiceControlScreen() {
       addAssistantMessage(responseMessage);
       updateSuggestions(text, reply);
       await speakResponse(responseMessage);
-    } catch (e) {
-      responseMessage = `Sorry, I had trouble processing that command. ${(e as any)?.message || 'Please try again.'}`;
-      console.log('[Voice] Error processing command:', e);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error) || 'Please try again.';
+      responseMessage = `Sorry, I had trouble processing that command. ${message}`;
+      console.log('[Voice] Error processing command:', error);
       addAssistantMessage(responseMessage);
       await speakResponse(responseMessage);
     }

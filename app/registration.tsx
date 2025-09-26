@@ -25,6 +25,11 @@ export default function RegistrationScreen() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [createdUser, setCreatedUser] = useState<any>(null);
 
+  const resetCaptureState = useCallback(() => {
+    setIsCapturing(false);
+    setStatusText(INITIAL_STATUS);
+  }, []);
+
   const handleInfoSubmit = () => {
     if (!userInfo.name.trim() || !userInfo.email.trim()) {
       Alert.alert('Error', 'Please fill in all fields');
@@ -55,7 +60,7 @@ export default function RegistrationScreen() {
       if (duplicate?.success && duplicate.user) {
         Alert.alert('Already Registered', `${duplicate.user.name} is already registered on this device.`);
         setStatusText(INITIAL_STATUS);
-        if (typeof resetCaptureState === 'function') resetCaptureState();
+        resetCaptureState();
         return;
       }
     } catch (error) {
@@ -98,7 +103,7 @@ export default function RegistrationScreen() {
     } finally {
       setIsCapturing(false);
     }
-  }, [userInfo]);
+  }, [userInfo, resetCaptureState]);
 
   const goBack = () => {
     if (step === 'capture') {

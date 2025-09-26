@@ -57,9 +57,10 @@
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
-    "@expo/cli": "^0.18.0",
+    "@expo/cli": "^0.18.31",
     "@types/react": "~19.1.10",
     "@types/react-native": "^0.72.8",
+    "jetifier": "^2.0.0",
     "typescript": "~5.9.2"
   }
 }

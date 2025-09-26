@@ -1,9 +1,22 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform, Animated } from 'react-native';
 import { Camera as CameraIcon, CircleCheck as CheckCircle, AlertCircle } from 'lucide-react-native';
+import { getErrorMessage, toError } from '../utils/errors';
 
 // Safe camera imports with better error handling
-let CameraView, useCameraPermissions;
+type CameraPermissionResponse = {
+  granted?: boolean;
+  canAskAgain?: boolean;
+  expires?: string;
+  status?: string;
+  error?: string;
+  [key: string]: any;
+};
+
+type UseCameraPermissionsHook = () => [CameraPermissionResponse | null, (() => Promise<CameraPermissionResponse>)?];
+
+let CameraView: ComponentType<any> | undefined;
+let useCameraPermissions: UseCameraPermissionsHook | undefined;
 let cameraAvailable = false;
 
 try {
@@ -12,8 +25,8 @@ try {
   useCameraPermissions = expoCamera.useCameraPermissions;
   cameraAvailable = true;
   console.log('[FaceRegistration] expo-camera loaded successfully');
-} catch (error) {
-  console.log('[FaceRegistration] expo-camera not available:', error.message);
+} catch (error: unknown) {
+  console.log('[FaceRegistration] expo-camera not available:', getErrorMessage(error));
   cameraAvailable = false;
 }
 
@@ -31,11 +44,13 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
   const [captureSuccess, setCaptureSuccess] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [webCameraStream, setWebCameraStream] = useState<MediaStream | null>(null);
-  const [permissions, requestPermission] = useCameraPermissions ? useCameraPermissions() : [null, null];
+  const cameraPermissions = useCameraPermissions?.() ?? [null, undefined];
+  const permissions = cameraPermissions[0] as CameraPermissionResponse | null;
+  const requestPermission = cameraPermissions[1] as (() => Promise<CameraPermissionResponse>) | undefined;
   const [debugInfo, setDebugInfo] = useState<any>({});
 
   const scanningRef = useRef(false);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Animation for capture effect
@@ -65,9 +80,9 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
       } else {
         await initializeMobileCamera();
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRegistration] Camera initialization failed:', error);
-      setCameraError(`Camera setup failed: ${error.message}`);
+      setCameraError(`Camera setup failed: ${getErrorMessage(error)}`);
     }
   };
 
@@ -95,15 +110,16 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
         videoRef.current.srcObject = stream;
         videoRef.current.play().catch(e => console.warn('Video play failed:', e));
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRegistration] Web camera failed:', error);
-      if (error.name === 'NotAllowedError') {
+      const err = toError(error);
+      if (err.name === 'NotAllowedError') {
         throw new Error('Camera permission denied. Please allow camera access.');
-      } else if (error.name === 'NotFoundError') {
-        throw new Error('No camera found. Please check your camera.');
-      } else {
-        throw new Error('Camera access failed.');
       }
+      if (err.name === 'NotFoundError') {
+        throw new Error('No camera found. Please check your camera.');
+      }
+      throw new Error('Camera access failed.');
     }
   };
 
@@ -127,7 +143,7 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
       }
       
       console.log('[FaceRegistration] Mobile camera ready');
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRegistration] Mobile camera setup failed:', error);
       // Don't throw - will use simulation
       console.log('[FaceRegistration] Falling back to simulation mode');
@@ -176,7 +192,7 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
       setTimeout(() => {
         onRegistrationComplete(templateStr);
       }, 1500);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRegistration] Registration completion error:', error);
       Alert.alert('Error', 'Could not complete face registration');
       setStatusText(INITIAL_STATUS);
@@ -240,7 +256,7 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
           setTimeout(() => setStatusText(INITIAL_STATUS), 2500);
         }
       }, 12000);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FaceRegistration] Capture failed:', error);
       Alert.alert('Capture Error', 'Failed to capture face. Please try again.');
       resetCaptureState();

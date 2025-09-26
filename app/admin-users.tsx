@@ -9,10 +9,25 @@ import theme from '../theme';
 
 const ROLE_OPTIONS: Array<'admin' | 'parent' | 'member'> = ['admin', 'parent', 'member'];
 
+type AdminUserRecord = {
+  id: string;
+  name: string;
+  role: string;
+  email?: string;
+  relation?: string;
+  pin?: string;
+  token?: string | null;
+  [key: string]: any;
+};
+
+type AdminMutationResult<T = AdminUserRecord> =
+  | { success: true; user?: T } 
+  | { success: false; error?: string; user?: T };
+
 export default function AdminUsersScreen() {
   const [session, setSession] = useState<any>(() => db.getAdminSession());
   const [loading, setLoading] = useState(false);
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<AdminUserRecord[]>([]);
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPin, setNewPin] = useState('');
@@ -34,7 +49,7 @@ export default function AdminUsersScreen() {
     console.log('[AdminUsers] Loading users...');
     setLoading(true);
     try {
-      let userList = [];
+      let userList: AdminUserRecord[] = [];
       
       if (remoteApi.enabled) {
         try {
@@ -43,14 +58,14 @@ export default function AdminUsersScreen() {
           console.log('[AdminUsers] Remote users loaded:', userList.length);
         } catch (error) {
           console.log('[AdminUsers] Remote users failed, using local fallback');
-          userList = db.getAllUsers();
+          userList = db.getAllUsers() as AdminUserRecord[];
         }
       } else {
         console.log('[AdminUsers] Remote API disabled, using local users');
-        userList = db.getAllUsers();
+        userList = db.getAllUsers() as AdminUserRecord[];
       }
       
-      console.log('[AdminUsers] Final user list:', userList.length, userList.map(u => ({ name: u.name, role: u.role })));
+      console.log('[AdminUsers] Final user list:', userList.length, userList.map((user) => ({ name: user.name, role: user.role })));
       setUsers(userList);
     } catch (e: any) {
       console.log('[AdminUsers] Load users error:', e);
@@ -91,7 +106,7 @@ export default function AdminUsersScreen() {
       }
       
       if (!success) {
-        const result = await db.adminUpdateUser(user.id, { role });
+        const result: AdminMutationResult = await db.adminUpdateUser(user.id, { role });
         if (!result.success) {
           Alert.alert('Update Failed', result.error || 'Could not update role.');
           return;
@@ -132,7 +147,7 @@ export default function AdminUsersScreen() {
               }
               
               if (!success) {
-                const result = await db.adminDeleteUser(user.id);
+                const result: AdminMutationResult = await db.adminDeleteUser(user.id);
                 if (!result.success) {
                   Alert.alert('Delete Failed', result.error || 'Could not remove user.');
                   return;
@@ -180,7 +195,7 @@ export default function AdminUsersScreen() {
       
       if (!success) {
         console.log('[AdminUsers] Using local user creation');
-        const result = await db.adminCreateUser(userData);
+        const result: AdminMutationResult = await db.adminCreateUser(userData);
         console.log('[AdminUsers] Local creation result:', result);
         if (!result.success) {
           Alert.alert('Create Failed', result.error || 'Could not create user.');

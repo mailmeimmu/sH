@@ -166,7 +166,7 @@ export function parseLocalCommand(text: string): LocalCommandResult {
     return {
       success: true,
       action: 'device.set',
-      say: generateResponse('device.set', room, device, action),
+      say: generateResponse('device.set', room || undefined, device, action),
       room: room || 'mainhall',
       device,
       value: action
