@@ -55,7 +55,6 @@
             "usesCleartextTraffic": true
           },
           "ios": {
-            "deploymentTarget": "15.1"
             "deploymentTarget": "15.1",
             "infoPlist": {
               "NSCameraUsageDescription": "This app needs camera access for face recognition features."
