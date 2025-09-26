@@ -46,20 +46,32 @@ export default function RegistrationScreen() {
   }, [createdUser, userInfo.email]);
 
   const completeRegistration = useCallback(async (templateStr: string) => {
+    console.log('[Registration] Completing registration with template');
     const faceId = 'fid_' + hashTemplateFromString(templateStr);
 
-    const duplicate = (db as any).matchFaceNoLogin?.(templateStr);
-    if (duplicate?.success && duplicate.user) {
-      Alert.alert('Already Registered', `${duplicate.user.name} is already registered on this device.`);
-      setStatusText(INITIAL_STATUS);
-      resetCaptureState();
-      return;
+    try {
+      // Check for duplicates safely
+      const duplicate = (db as any).matchFaceNoLogin?.(templateStr);
+      if (duplicate?.success && duplicate.user) {
+        Alert.alert('Already Registered', `${duplicate.user.name} is already registered on this device.`);
+        setStatusText(INITIAL_STATUS);
+        if (typeof resetCaptureState === 'function') resetCaptureState();
+        return;
+      }
+    } catch (error) {
+      console.warn('[Registration] Duplicate check failed:', error);
+      // Continue with registration even if duplicate check fails
     }
 
     try {
       let result: any = { success: false };
       if (remoteApi.enabled) {
-        result = await remoteApi.registerUser({ ...userInfo, faceId }, templateStr);
+        try {
+          result = await remoteApi.registerUser({ ...userInfo, faceId }, templateStr);
+        } catch (error) {
+          console.warn('[Registration] Remote registration failed, trying local:', error);
+          result = await db.registerUser({ ...userInfo, faceId }, templateStr);
+        }
       } else {
         result = await db.registerUser({ ...userInfo, faceId }, templateStr);
       }
@@ -69,15 +81,19 @@ export default function RegistrationScreen() {
         db.saveRemoteUser(enrichedUser, templateStr, faceId);
         setCreatedUser(enrichedUser);
         setStep('success');
+        console.log('[Registration] Registration successful for:', enrichedUser.name);
       } else if (result.duplicate && result.user) {
         Alert.alert('Already Registered', `${result.user.name} is already registered on this device.`);
         setStatusText(INITIAL_STATUS);
       } else {
-        Alert.alert('Registration Failed', result?.error || 'Please try again');
+        const errorMsg = result?.error || 'Registration failed. Please try again.';
+        console.warn('[Registration] Registration failed:', errorMsg);
+        Alert.alert('Registration Failed', errorMsg);
         setStatusText(INITIAL_STATUS);
       }
     } catch (error) {
-      Alert.alert('Error', 'Could not capture face');
+      console.error('[Registration] Registration error:', error);
+      Alert.alert('Error', 'Could not complete registration. Please try again.');
       setStatusText(INITIAL_STATUS);
     } finally {
       setIsCapturing(false);

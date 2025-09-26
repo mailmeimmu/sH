@@ -199,7 +199,8 @@ export default function HomeControlScreen() {
           await voiceService.requestPermissions();
         }
       } catch (error) {
-        console.log('[Home] Voice init error:', error);
+        console.warn('[Home] Voice init error:', error?.message || error);
+        // Continue without voice if it fails
       }
     };
     initVoice();
@@ -207,20 +208,26 @@ export default function HomeControlScreen() {
   }, []);
 
   const startAssistant = async () => {
-    if (vaSpeaking || !voiceService.isAvailable() || Platform.OS !== 'web') return;
+    if (vaSpeaking || !voiceService.isAvailable()) return;
+    
+    if (!db.can('voice.use')) {
+      Alert.alert('Permission', 'You are not allowed to use voice control.');
+      return;
+    }
+    
     setVaListening(true);
     try {
       const result = await voiceService.startListening();
       setVaListening(false);
-      const text = result?.transcript || '';
-      if (text) await handleAssistantText(text);
+      
+      if (result?.transcript) {
+        await handleAssistantText(result.transcript);
+      }
     } catch (e) {
       setVaListening(false);
-      console.log('[Home] Assistant listening error:', e);
+      console.warn('[Home] Assistant listening error:', e?.message || e);
     } finally {
-      if (Platform.OS === 'web') {
-        setTimeout(() => startAssistant(), 300);
-      }
+      // Remove auto-restart to prevent crashes
     }
   };
 
@@ -428,16 +435,18 @@ export default function HomeControlScreen() {
       return;
     }
     
-    if (Platform.OS === 'web') {
-      Alert.alert('Voice Control', 'Voice assistant is active. Click the microphone icon to speak.');
+    if (!voiceService.isAvailable()) {
+      Alert.alert('Voice Control', 'Voice recognition is not available on this device. Please check your microphone permissions.');
+    } else if (Platform.OS === 'web') {
+      Alert.alert('Voice Control', 'Voice assistant is available. Go to the Voice Control tab for full conversation mode.');
     } else {
       Alert.alert(
         'Voice Control', 
-        'Voice control is available. Use the Voice Control tab for full conversation mode, or try speaking a command.',
+        'Voice control is available. Use the Voice Control tab for the best experience.',
         [
           { text: 'OK' },
           { 
-            text: 'Try Voice Command', 
+            text: 'Go to Voice Control', 
             onPress: () => {
               router.push('/(tabs)/voice');
             }

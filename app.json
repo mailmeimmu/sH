@@ -47,6 +47,13 @@
       "expo-speech-recognition",
       "react-native-vision-camera",
       [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "$(PRODUCT_NAME) needs access to your Camera for face recognition.",
+          "enableMicrophonePermission": false
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

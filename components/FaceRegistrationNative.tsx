@@ -1,15 +1,37 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform } from 'react-native';
-import {
-  Camera as VisionCamera,
-  useCameraPermission,
-  useCameraDevice,
-  useFrameProcessor,
-} from 'react-native-vision-camera';
-import { runOnJS, useSharedValue } from 'react-native-reanimated';
+import { Camera as CameraIcon, CircleCheck as CheckCircle } from 'lucide-react-native';
+
+// Safe imports with error handling
+let VisionCamera, useCameraPermission, useCameraDevice, useFrameProcessor;
+let runOnJS, useSharedValue;
+
+try {
+  const visionCamera = require('react-native-vision-camera');
+  VisionCamera = visionCamera.Camera;
+  useCameraPermission = visionCamera.useCameraPermission;
+  useCameraDevice = visionCamera.useCameraDevice;
+  useFrameProcessor = visionCamera.useFrameProcessor;
+} catch (error) {
+  console.warn('[FaceRegistration] Vision Camera not available:', error?.message);
+  VisionCamera = null;
+  useCameraPermission = () => ({ hasPermission: false, requestPermission: () => Promise.resolve(false) });
+  useCameraDevice = () => null;
+  useFrameProcessor = () => null;
+}
+
+try {
+  const reanimated = require('react-native-reanimated');
+  runOnJS = reanimated.runOnJS;
+  useSharedValue = reanimated.useSharedValue;
+} catch (error) {
+  console.warn('[FaceRegistration] Reanimated not available:', error?.message);
+  runOnJS = (fn) => fn;
+  useSharedValue = (value) => ({ value });
+}
+
 import { scanFaces } from '../utils/face-detection';
-import { Camera as CameraIcon, Save, CircleCheck as CheckCircle } from 'lucide-react-native';
-import { buildTemplateFromFace, normalizeVisionFace, hashTemplateFromString } from '../utils/face-template';
+import { buildTemplateFromFace, normalizeVisionFace } from '../utils/face-template';
 
 const INITIAL_STATUS = 'Press scan when you are ready';
 
@@ -22,93 +44,196 @@ type Props = {
 export default function FaceRegistrationNative({ userInfo, onRegistrationComplete, onGoBack }: Props) {
   const [statusText, setStatusText] = useState(INITIAL_STATUS);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [captureSuccess, setCaptureSuccess] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const permission = useCameraPermission();
-  const device = useCameraDevice('front');
-  const scanning = useSharedValue(false);
+  const permission = useCameraPermission ? useCameraPermission() : { hasPermission: false, requestPermission: () => Promise.resolve(false) };
+  const device = useCameraDevice ? useCameraDevice('front') : null;
+  const scanning = useSharedValue ? useSharedValue(false) : { value: false };
   const scanningRef = useRef(false);
   const permissionRequestedRef = useRef(false);
 
+  const isReady = useMemo(() => {
+    if (!VisionCamera) return false;
+    return !!device && permission.hasPermission;
+  }, [device, permission.hasPermission]);
+
   useEffect(() => {
+    if (!VisionCamera) {
+      setCameraError('Camera not available on this device');
+      return;
+    }
+
     if (!permission.hasPermission && !permissionRequestedRef.current) {
       permissionRequestedRef.current = true;
-      permission.requestPermission().catch(() => {});
+      permission.requestPermission().catch((error) => {
+        console.warn('[FaceRegistration] Permission request failed:', error);
+        setCameraError('Camera permission required');
+      });
     }
   }, [permission.hasPermission, permission]);
 
-  const isReady = useMemo(() => !!device && permission.hasPermission, [device, permission.hasPermission]);
-
   const ensurePermission = useCallback(async () => {
     if (permission.hasPermission) return true;
-    const granted = await permission.requestPermission();
-    return granted;
+    try {
+      const granted = await permission.requestPermission();
+      return granted;
+    } catch (error) {
+      console.warn('[FaceRegistration] Permission error:', error);
+      return false;
+    }
   }, [permission]);
 
   const resetCaptureState = useCallback(() => {
-    scanning.value = false;
+    if (scanning.value !== undefined) {
+      scanning.value = false;
+    }
     scanningRef.current = false;
     setIsCapturing(false);
   }, [scanning]);
 
   const completeRegistration = useCallback(async (templateStr: string) => {
     try {
-      onRegistrationComplete(templateStr);
+      setCaptureSuccess(true);
+      setStatusText('Face captured successfully! Completing registration...');
+      
+      setTimeout(() => {
+        onRegistrationComplete(templateStr);
+      }, 1500);
     } catch (error) {
-      Alert.alert('Error', 'Could not capture face');
+      console.error('[FaceRegistration] Registration completion error:', error);
+      Alert.alert('Error', 'Could not complete face registration');
       setStatusText(INITIAL_STATUS);
+      setCaptureSuccess(false);
     } finally {
       resetCaptureState();
     }
   }, [resetCaptureState, onRegistrationComplete]);
 
   const handleDetectedFace = useCallback((face: any) => {
-    const normalized = normalizeVisionFace(face);
-    const templateStr = JSON.stringify(buildTemplateFromFace(normalized));
-    completeRegistration(templateStr);
-  }, [completeRegistration]);
+    try {
+      const normalized = normalizeVisionFace(face);
+      const templateStr = JSON.stringify(buildTemplateFromFace(normalized));
+      completeRegistration(templateStr);
+    } catch (error) {
+      console.warn('[FaceRegistration] Face processing error:', error);
+      setStatusText('Face processing failed. Try again.');
+      setTimeout(() => setStatusText(INITIAL_STATUS), 2000);
+      resetCaptureState();
+    }
+  }, [completeRegistration, resetCaptureState]);
 
   const handleFaces = useCallback((faces: any[]) => {
     if (!scanningRef.current) return;
-    if (!faces || faces.length === 0) {
-      return;
+    
+    try {
+      if (!faces || faces.length === 0) {
+        setStatusText('Position your face in the frame');
+        return;
+      }
+      
+      if (faces.length !== 1) {
+        setStatusText(faces.length > 1 ? 'Only one face should be in frame.' : 'Align your face within the frame.');
+        return;
+      }
+      
+      if (scanning.value !== undefined) {
+        scanning.value = false;
+      }
+      scanningRef.current = false;
+      setStatusText('Processing face...');
+      
+      if (faces[0]) {
+        handleDetectedFace(faces[0]);
+      }
+    } catch (error) {
+      console.warn('[FaceRegistration] Face handling error:', error);
+      resetCaptureState();
+      setStatusText('Face detection error. Try again.');
     }
-    if (faces.length !== 1) {
-      setStatusText(faces.length > 1 ? 'Only one face should be in frame.' : 'Align your face within the frame.');
-      return;
-    }
-    scanning.value = false;
-    scanningRef.current = false;
-    setStatusText('Processing face...');
-    if (faces[0]) {
-      handleDetectedFace(faces[0]);
-    }
-  }, [handleDetectedFace, scanning]);
+  }, [handleDetectedFace, scanning, resetCaptureState]);
 
-  const frameProcessor = useFrameProcessor((frame) => {
+  const frameProcessor = useFrameProcessor ? useFrameProcessor((frame) => {
     'worklet';
-    if (!scanning.value) return;
-    const faces = scanFaces(frame);
-    if (faces && faces.length > 0) {
-      runOnJS(handleFaces)(faces);
+    
+    try {
+      if (!scanning.value) return;
+      
+      const faces = scanFaces(frame);
+      if (faces && faces.length > 0) {
+        if (runOnJS) {
+          runOnJS(handleFaces)(faces);
+        } else {
+          handleFaces(faces);
+        }
+      }
+    } catch (error) {
+      console.warn('[FaceRegistration] Frame processor error:', error);
     }
-  }, [handleFaces]);
+  }, [handleFaces]) : undefined;
 
   const handleCapture = useCallback(async () => {
-    if (isCapturing) return;
-    const granted = await ensurePermission();
-    if (!granted) {
-      Alert.alert('Camera', 'Camera access is required to scan faces.');
+    if (isCapturing || captureSuccess) {
+      console.log('[FaceRegistration] Already capturing or completed');
       return;
     }
-    if (!device) {
-      Alert.alert('Camera', 'Camera not ready yet.');
-      return;
+
+    try {
+      const granted = await ensurePermission();
+      if (!granted) {
+        Alert.alert('Camera Permission', 'Camera access is required to register your face. Please grant permission in settings.');
+        return;
+      }
+
+      if (!device) {
+        Alert.alert('Camera Error', 'Camera is not ready. Please try again.');
+        return;
+      }
+
+      setStatusText('Hold still and look straight at the camera.');
+      setIsCapturing(true);
+      scanningRef.current = true;
+      
+      if (scanning.value !== undefined) {
+        scanning.value = true;
+      }
+
+      // Auto-timeout after 10 seconds
+      setTimeout(() => {
+        if (scanningRef.current) {
+          console.log('[FaceRegistration] Capture timeout');
+          resetCaptureState();
+          setStatusText('Capture timeout. Try again.');
+          setTimeout(() => setStatusText(INITIAL_STATUS), 2000);
+        }
+      }, 10000);
+    } catch (error) {
+      console.error('[FaceRegistration] Capture failed:', error);
+      Alert.alert('Capture Error', 'Failed to start face capture. Please try again.');
+      resetCaptureState();
     }
-    setStatusText('Hold still and look straight at the camera.');
-    setIsCapturing(true);
-    scanningRef.current = true;
-    scanning.value = true;
-  }, [device, ensurePermission, isCapturing, scanning]);
+  }, [device, ensurePermission, isCapturing, captureSuccess, scanning, resetCaptureState]);
+
+  if (cameraError) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={onGoBack}>
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>Face Registration</Text>
+        </View>
+        <View style={styles.permissionContainer}>
+          <CameraIcon size={64} color="#EF4444" />
+          <Text style={styles.title}>Camera Not Available</Text>
+          <Text style={styles.subtitle}>{cameraError}</Text>
+          <TouchableOpacity style={styles.primaryButton} onPress={onGoBack}>
+            <Text style={styles.primaryButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   if (!permission.hasPermission) {
     return (
@@ -117,7 +242,7 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
           <TouchableOpacity style={styles.backButton} onPress={onGoBack}>
             <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Face Capture</Text>
+          <Text style={styles.title}>Face Registration</Text>
         </View>
         <View style={styles.permissionContainer}>
           <CameraIcon size={64} color="#3B82F6" />
@@ -136,7 +261,15 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
   if (!isReady) {
     return (
       <View style={styles.container}>
-        <Text style={styles.loadingText}>Loading camera...</Text>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={onGoBack}>
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>Face Registration</Text>
+        </View>
+        <View style={styles.permissionContainer}>
+          <Text style={styles.loadingText}>Loading camera...</Text>
+        </View>
       </View>
     );
   }
@@ -147,34 +280,51 @@ export default function FaceRegistrationNative({ userInfo, onRegistrationComplet
         <TouchableOpacity style={styles.backButton} onPress={onGoBack}>
           <Text style={styles.backButtonText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Face Capture</Text>
+        <Text style={styles.title}>Face Registration</Text>
       </View>
 
       <View style={styles.cameraContainer}>
-        <VisionCamera
-          style={styles.camera}
-          device={device!}
-          isActive
-          frameProcessor={frameProcessor}
-        />
+        {VisionCamera && device && frameProcessor ? (
+          <VisionCamera
+            style={styles.camera}
+            device={device}
+            isActive
+            frameProcessor={frameProcessor}
+          />
+        ) : (
+          <View style={styles.mockCamera}>
+            <Text style={styles.mockText}>Camera Preview</Text>
+          </View>
+        )}
+        
         <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, styles.overlay]}>
           <View style={[styles.faceFrame,
             isCapturing && styles.faceFrameActive,
+            captureSuccess && styles.faceFrameSuccess,
           ]} />
 
           <View style={styles.scanningIndicator}>
-            <Text style={styles.scanningText}>{isCapturing ? 'Scanning…' : statusText}</Text>
+            <Text style={styles.scanningText}>{statusText}</Text>
           </View>
+
+          {captureSuccess && (
+            <View style={styles.successIndicator}>
+              <CheckCircle size={32} color="#10B981" />
+              <Text style={styles.successText}>Face captured!</Text>
+            </View>
+          )}
         </View>
       </View>
 
       <View style={styles.controls}>
         <TouchableOpacity
-          style={[styles.primaryButton, isCapturing && styles.primaryButtonDisabled]}
+          style={[styles.primaryButton, (isCapturing || captureSuccess) && styles.primaryButtonDisabled]}
           onPress={handleCapture}
-          disabled={isCapturing}
+          disabled={isCapturing || captureSuccess}
         >
-          <Text style={styles.primaryButtonText}>{isCapturing ? 'Scanning…' : 'Scan Face'}</Text>
+          <Text style={styles.primaryButtonText}>
+            {captureSuccess ? 'Captured!' : isCapturing ? 'Scanning…' : 'Scan Face'}
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -219,6 +369,16 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
   },
+  mockCamera: {
+    flex: 1,
+    backgroundColor: '#374151',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mockText: {
+    color: '#9CA3AF',
+    fontSize: 16,
+  },
   overlay: {
     justifyContent: 'center',
     alignItems: 'center',
@@ -235,6 +395,9 @@ const styles = StyleSheet.create({
   faceFrameActive: {
     borderColor: '#3B82F6',
   },
+  faceFrameSuccess: {
+    borderColor: '#10B981',
+  },
   scanningIndicator: {
     position: 'absolute',
     bottom: 32,
@@ -246,6 +409,21 @@ const styles = StyleSheet.create({
     color: '#E5E7EB',
     fontSize: 16,
     fontWeight: '600',
+  },
+  successIndicator: {
+    position: 'absolute',
+    top: 32,
+    alignItems: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  successText: {
+    color: '#10B981',
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 4,
   },
   controls: {
     marginTop: 16,

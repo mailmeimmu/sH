@@ -122,10 +122,12 @@ export default function VoiceControlScreen() {
     // Initialize and destroy the voice service
     const initVoice = async () => {
       try {
+        console.log('[Voice] Initializing voice service...');
         await voiceService.requestPermissions();
         console.log('[Voice] Voice service initialized');
       } catch (error) {
-        console.log('[Voice] Voice service init error:', error);
+        console.warn('[Voice] Voice service init error:', error?.message || error);
+        // Don't block the UI if voice fails to initialize
       }
     };
     
@@ -161,33 +163,51 @@ export default function VoiceControlScreen() {
       return;
     }
     
+    if (!voiceService.isAvailable()) {
+      Alert.alert('Voice Control', 'Voice recognition is not available on this device. Please check your microphone permissions.');
+      return;
+    }
+    
     setTranscript('');
     setIsListening(true);
     console.log('[Voice] About to start listening...');
     
     // Use actual voice service
-    voiceService.startListening()
+    try {
+      voiceService.startListening()
       .then((result) => {
         console.log('[Voice] Recognition result:', result);
-        setTranscript(result.transcript);
+        setTranscript(result?.transcript || '');
         setIsListening(false);
-        handleVoiceCommand(result.transcript);
+        if (result?.transcript) {
+          handleVoiceCommand(result.transcript);
+        }
       })
       .catch((error) => {
         setIsListening(false);
         console.log('[Voice] Recognition error:', error);
-        if (error.message.includes('permission')) {
+        const errorMsg = error?.message || String(error);
+        if (errorMsg.includes('permission')) {
           Alert.alert('Microphone Permission', 'Please grant microphone permission to use voice control.');
-        } else if (error.message.includes('not available')) {
+        } else if (errorMsg.includes('not available')) {
           addAssistantMessage('Voice recognition not available on this device. Please type your command below.');
         } else {
-          addAssistantMessage('Could not understand your voice. Please try again or type your command.');
+          addAssistantMessage(`Voice error: ${errorMsg}. Please try again or type your command.`);
         }
       });
+    } catch (error) {
+      console.error('[Voice] Start listening exception:', error);
+      setIsListening(false);
+      Alert.alert('Voice Error', 'Failed to start voice recognition. Please try again.');
+    }
   };
 
   const stopListening = () => {
-    voiceService.stopListening();
+    try {
+      voiceService.stopListening();
+    } catch (error) {
+      console.warn('[Voice] Stop listening error:', error);
+    }
     setIsListening(false);
   };
 

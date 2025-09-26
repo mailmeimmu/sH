@@ -21,16 +21,25 @@ const FACE_STATUS_IDLE = 'Tap scan when you are ready';
 export default function FaceRecognitionScreen() {
   const handleAuthenticationResult = useCallback(async (success: boolean, data?: any) => {
     if (!success) {
+      console.log('[FaceRecognition] Authentication failed');
       return;
     }
     
     const templateStr = data?.template;
-    if (!templateStr) return;
+    if (!templateStr) {
+      console.warn('[FaceRecognition] No template data received');
+      return;
+    }
     
     try {
       let result: any = { success: false };
       if (remoteApi.enabled) {
-        result = await remoteApi.authByFace(templateStr);
+        try {
+          result = await remoteApi.authByFace(templateStr);
+        } catch (error) {
+          console.warn('[FaceRecognition] Remote auth failed, trying local:', error);
+          result = await db.authenticateByFace(templateStr);
+        }
       } else {
         try { await (db as any).readyPromise; } catch {}
         result = await db.authenticateByFace(templateStr);
@@ -41,10 +50,12 @@ export default function FaceRecognitionScreen() {
         try { await SecureStore.setItemAsync('last_user_id', result.user.id); } catch {}
         setTimeout(() => router.replace('/(tabs)'), 900);
       } else {
-        // Handle failure in the component
+        console.log('[FaceRecognition] Authentication result failed:', result?.error);
+        Alert.alert('Authentication Failed', result?.error || 'Face not recognized. Please try again or use another login method.');
       }
     } catch (error) {
-      console.log('[NafisaSmartHome] Face match error', error);
+      console.error('[FaceRecognition] Face match error:', error);
+      Alert.alert('Error', 'Face authentication failed. Please try again.');
     }
   }, []);
 

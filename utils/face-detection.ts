@@ -22,7 +22,7 @@ export function createMockFace() {
   };
 }
 
-// Face detection function that works across platforms
+// Safe face detection function with proper error handling
 export function scanFaces(frame: any) {
   'worklet';
   
@@ -31,18 +31,20 @@ export function scanFaces(frame: any) {
     return Math.random() > 0.7 ? [createMockFace()] : [];
   }
   
-  // For native platforms, try to use actual face detection
+  // For native platforms, try to use actual face detection with safe fallback
   try {
     // Try to import and use the real face detector
     const faceDetector = require('vision-camera-face-detector');
-    if (faceDetector && faceDetector.scanFaces) {
+    if (faceDetector && typeof faceDetector.scanFaces === 'function') {
       return faceDetector.scanFaces(frame);
     }
   } catch (error) {
-    console.warn('[FaceDetection] Native face detection not available, using mock');
+    console.warn('[FaceDetection] Native face detection not available:', error?.message);
+    // Return empty array instead of crashing
+    return [];
   }
   
-  // Fallback to simulation
+  // Fallback to simulation for development
   return Math.random() > 0.8 ? [createMockFace()] : [];
 }
 
