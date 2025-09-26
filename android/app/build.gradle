@@ -8,9 +8,12 @@ configurations.all {
     resolutionStrategy {
         force 'androidx.core:core:1.16.0'
         force 'androidx.versionedparcelable:versionedparcelable:1.1.1'
+        force 'androidx.appcompat:appcompat:1.6.1'
+        force 'androidx.fragment:fragment:1.6.2'
+        force 'androidx.lifecycle:lifecycle-common:2.7.0'
+        force 'androidx.collection:collection:1.4.0'
     }
-    exclude group: 'com.android.support', module: 'support-compat'
-    exclude group: 'com.android.support', module: 'versionedparcelable'
+    exclude group: 'com.android.support'
 }
 
 /**
