@@ -2,12 +2,6 @@
 // This keeps the JS require try/catch safe while avoiding native conflicts.
 module.exports = {
   dependencies: {
-    '@react-native-voice/voice': {
-      platforms: {
-        ios: null,
-        android: null,
-      },
-    },
     'vision-camera-face-detector': {
       platforms: {
         ios: null,

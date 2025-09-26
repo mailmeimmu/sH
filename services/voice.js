@@ -1,7 +1,29 @@
 import { Platform } from 'react-native';
 import * as Speech from 'expo-speech';
 
-// Robust voice service with proper error handling and debugging
+// Import native voice recognition for mobile
+let Voice = null;
+let ExpoSpeechRecognition = null;
+
+try {
+  if (Platform.OS !== 'web') {
+    // Try to use @react-native-voice/voice first
+    Voice = require('@react-native-voice/voice').default;
+    console.log('[Voice] react-native-voice loaded successfully');
+  }
+} catch (error) {
+  console.log('[Voice] react-native-voice not available, trying expo-speech-recognition');
+  try {
+    if (Platform.OS !== 'web') {
+      ExpoSpeechRecognition = require('expo-speech-recognition');
+      console.log('[Voice] expo-speech-recognition loaded successfully');
+    }
+  } catch (error2) {
+    console.log('[Voice] No mobile voice recognition available, will use simulation');
+  }
+}
+
+// Enhanced voice service with real mobile voice recognition
 class VoiceService {
   constructor() {
     this.isListening = false;
@@ -10,8 +32,9 @@ class VoiceService {
     this.hasInitialized = false;
     this.permissionsGranted = false;
     this.lastError = null;
+    this.voiceEvents = [];
     
-    // Initialize safely with better error tracking
+    // Initialize voice service
     this.initializeAsync();
   }
 
@@ -30,7 +53,7 @@ class VoiceService {
     } catch (error) {
       console.error('[Voice] Initialization failed:', error);
       this.lastError = error.message || 'Initialization failed';
-      this.hasInitialized = true; // Mark as initialized even if failed
+      this.hasInitialized = true;
     }
   }
 
@@ -38,7 +61,6 @@ class VoiceService {
     if (typeof window === 'undefined') return;
     
     try {
-      // Check for speech recognition support
       const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
       
       if (!SpeechRecognition) {
@@ -50,11 +72,6 @@ class VoiceService {
       this.webRecognition.interimResults = false;
       this.webRecognition.lang = 'en-US';
       
-      // Test speech synthesis
-      if (!window.speechSynthesis) {
-        console.warn('[Voice] Speech synthesis not available');
-      }
-      
       console.log('[Voice] Web speech initialized');
     } catch (error) {
       console.error('[Voice] Web speech initialization failed:', error);
@@ -64,16 +81,49 @@ class VoiceService {
 
   async initializeMobileSpeech() {
     try {
-      // For mobile, we'll use a safe approach with expo-speech only
-      // Test if expo-speech is available
-      if (!Speech || !Speech.speak) {
-        throw new Error('Speech synthesis not available');
+      if (Voice) {
+        console.log('[Voice] Initializing react-native-voice');
+        
+        // Set up event listeners
+        Voice.onSpeechStart = () => {
+          console.log('[Voice] Speech recognition started');
+        };
+        
+        Voice.onSpeechResults = (e) => {
+          console.log('[Voice] Speech results:', e.value);
+          this.voiceEvents.push({ type: 'results', data: e.value });
+        };
+        
+        Voice.onSpeechError = (e) => {
+          console.error('[Voice] Speech error:', e.error);
+          this.voiceEvents.push({ type: 'error', data: e.error });
+        };
+        
+        Voice.onSpeechEnd = () => {
+          console.log('[Voice] Speech recognition ended');
+          this.voiceEvents.push({ type: 'end' });
+        };
+        
+        console.log('[Voice] react-native-voice initialized');
+      } else if (ExpoSpeechRecognition) {
+        console.log('[Voice] Using expo-speech-recognition');
+        
+        // Check if speech recognition is available
+        const isAvailable = await ExpoSpeechRecognition.getStateAsync();
+        console.log('[Voice] Speech recognition state:', isAvailable);
+        
+      } else {
+        console.log('[Voice] No mobile voice recognition available, using simulation');
       }
       
-      console.log('[Voice] Mobile speech initialized (TTS only)');
+      // Initialize speech synthesis
+      if (Speech && Speech.speak) {
+        console.log('[Voice] Speech synthesis available');
+      }
+      
     } catch (error) {
       console.error('[Voice] Mobile speech initialization failed:', error);
-      throw error;
+      // Don't throw - we can fall back to simulation
     }
   }
 
@@ -82,11 +132,10 @@ class VoiceService {
       console.log('[Voice] Requesting permissions for platform:', Platform.OS);
       
       if (Platform.OS === 'web') {
-        // Test microphone access
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(track => track.stop()); // Clean up
+            stream.getTracks().forEach(track => track.stop());
             this.permissionsGranted = true;
             console.log('[Voice] Web microphone permission granted');
             return { granted: true };
@@ -100,11 +149,39 @@ class VoiceService {
           return { granted: false, error: 'Microphone not available' };
         }
       } else {
-        // For mobile, we'll assume permissions are granted to avoid crashes
-        // The actual permission handling should be done by the parent app
-        console.log('[Voice] Mobile permissions assumed granted');
-        this.permissionsGranted = true;
-        return { granted: true };
+        // Mobile permission handling
+        if (Voice) {
+          try {
+            const isAvailable = await Voice.isAvailable();
+            if (isAvailable) {
+              this.permissionsGranted = true;
+              console.log('[Voice] Mobile voice recognition available');
+              return { granted: true };
+            } else {
+              this.lastError = 'Voice recognition not available on device';
+              return { granted: false, error: 'Voice recognition not available' };
+            }
+          } catch (error) {
+            console.error('[Voice] Voice permission check failed:', error);
+            this.lastError = error.message || 'Permission check failed';
+            return { granted: false, error: this.lastError };
+          }
+        } else if (ExpoSpeechRecognition) {
+          try {
+            const permissions = await ExpoSpeechRecognition.requestPermissionsAsync();
+            this.permissionsGranted = permissions.granted;
+            console.log('[Voice] Expo speech recognition permissions:', permissions);
+            return { granted: permissions.granted, error: permissions.granted ? null : 'Permission denied' };
+          } catch (error) {
+            console.error('[Voice] Expo speech permission failed:', error);
+            this.lastError = error.message || 'Permission request failed';
+            return { granted: false, error: this.lastError };
+          }
+        } else {
+          console.log('[Voice] No mobile voice recognition available');
+          this.permissionsGranted = true; // Allow simulation mode
+          return { granted: true, simulation: true };
+        }
       }
     } catch (error) {
       console.error('[Voice] Permission request failed:', error);
@@ -127,11 +204,14 @@ class VoiceService {
     console.log('[Voice] Starting to listen...', { 
       platform: Platform.OS, 
       permissions: this.permissionsGranted,
+      hasVoice: !!Voice,
+      hasExpoSpeech: !!ExpoSpeechRecognition,
       webRecognition: !!this.webRecognition 
     });
     
     this.isListening = true;
     this.lastError = null;
+    this.voiceEvents = []; // Clear previous events
 
     return new Promise((resolve, reject) => {
       try {
@@ -163,35 +243,88 @@ class VoiceService {
           };
 
           this.webRecognition.start();
-        } else {
-          // For mobile platforms, use a safe simulation to prevent crashes
-          console.log('[Voice] Using mobile simulation mode to prevent crashes');
           
-          // Simulate voice recognition with realistic delay
+        } else if (Platform.OS !== 'web' && Voice) {
+          console.log('[Voice] Using react-native-voice');
+          
+          // Set up one-time listeners for this session
+          const cleanup = () => {
+            Voice.removeAllListeners();
+            this.isListening = false;
+          };
+          
+          Voice.onSpeechResults = (e) => {
+            cleanup();
+            const transcript = e.value && e.value[0] ? e.value[0] : '';
+            console.log('[Voice] Native recognition result:', transcript);
+            if (transcript) {
+              resolve({ transcript, confidence: 0.9 });
+            } else {
+              reject(new Error('No speech detected'));
+            }
+          };
+          
+          Voice.onSpeechError = (e) => {
+            cleanup();
+            console.error('[Voice] Native recognition error:', e.error);
+            this.lastError = e.error?.message || e.error || 'Speech recognition failed';
+            reject(new Error(this.lastError));
+          };
+          
+          Voice.onSpeechEnd = () => {
+            console.log('[Voice] Native recognition ended');
+            // Don't cleanup here, wait for results or error
+          };
+          
+          // Start recognition
+          Voice.start('en-US');
+          
+          // Timeout after 10 seconds
+          setTimeout(() => {
+            if (this.isListening) {
+              cleanup();
+              reject(new Error('Speech recognition timeout'));
+            }
+          }, 10000);
+          
+        } else if (Platform.OS !== 'web' && ExpoSpeechRecognition) {
+          console.log('[Voice] Using expo-speech-recognition');
+          
+          try {
+            const result = await ExpoSpeechRecognition.startAsync({
+              language: 'en-US',
+              interimResults: false,
+              maxAlternatives: 1,
+              continuous: false,
+            });
+            
+            this.isListening = false;
+            
+            if (result.transcripts && result.transcripts.length > 0) {
+              const transcript = result.transcripts[0];
+              console.log('[Voice] Expo recognition result:', transcript);
+              resolve({ transcript, confidence: result.confidence || 0.9 });
+            } else {
+              reject(new Error('No speech detected'));
+            }
+          } catch (error) {
+            this.isListening = false;
+            console.error('[Voice] Expo recognition error:', error);
+            this.lastError = error.message || 'Speech recognition failed';
+            reject(new Error(this.lastError));
+          }
+          
+        } else {
+          // Fallback simulation for when no voice recognition is available
+          console.log('[Voice] Using simulation mode - no voice recognition available');
+          
+          // Simulate listening process
           setTimeout(() => {
             this.isListening = false;
             
-            // Provide some realistic voice commands for testing
-            const simulatedCommands = [
-              'Turn on all lights',
-              'Lock all doors',
-              'Turn off bedroom fan',
-              'Unlock main door',
-              'Turn on kitchen light',
-              'Turn off all lights',
-              'Lock bedroom door',
-              'Turn on main hall fan'
-            ];
-            
-            const randomCommand = simulatedCommands[Math.floor(Math.random() * simulatedCommands.length)];
-            console.log('[Voice] Mobile simulation result:', randomCommand);
-            
-            resolve({ 
-              transcript: randomCommand, 
-              confidence: 0.85,
-              isSimulated: true 
-            });
-          }, 2000 + Math.random() * 1000); // 2-3 second delay for realism
+            // Instead of random commands, ask user to type
+            reject(new Error('Voice recognition not available on this device. Please use the text input below.'));
+          }, 1500);
         }
       } catch (error) {
         this.isListening = false;
@@ -209,6 +342,11 @@ class VoiceService {
     try {
       if (this.webRecognition && Platform.OS === 'web') {
         this.webRecognition.stop();
+      } else if (Voice && Platform.OS !== 'web') {
+        await Voice.stop();
+        Voice.removeAllListeners();
+      } else if (ExpoSpeechRecognition && Platform.OS !== 'web') {
+        await ExpoSpeechRecognition.stop();
       }
     } catch (error) {
       console.warn('[Voice] Failed to stop listening:', error);
@@ -228,7 +366,6 @@ class VoiceService {
       if (Platform.OS === 'web' && typeof window !== 'undefined' && window.speechSynthesis) {
         return new Promise((resolve) => {
           try {
-            // Cancel any existing speech
             window.speechSynthesis.cancel();
             
             const utterance = new SpeechSynthesisUtterance(text);
@@ -246,7 +383,7 @@ class VoiceService {
             utterance.onerror = (error) => {
               console.warn('[Voice] Web speech error:', error);
               this.isSpeaking = false;
-              resolve(); // Resolve anyway to prevent hanging
+              resolve();
             };
             
             window.speechSynthesis.speak(utterance);
@@ -259,8 +396,7 @@ class VoiceService {
       } else if (Platform.OS !== 'web' && Speech && Speech.speak) {
         return new Promise((resolve) => {
           try {
-            // Stop any existing speech first
-            Speech.stop().catch(() => {}); // Ignore stop errors
+            Speech.stop().catch(() => {});
             
             Speech.speak(text, {
               language: 'en-US',
@@ -279,7 +415,7 @@ class VoiceService {
               onError: (error) => {
                 console.warn('[Voice] Mobile speech error:', error);
                 this.isSpeaking = false;
-                resolve(); // Resolve anyway to prevent hanging
+                resolve();
               }
             });
           } catch (error) {
@@ -319,12 +455,19 @@ class VoiceService {
         (typeof window !== 'undefined' && (window.webkitSpeechRecognition || window.SpeechRecognition))
       );
     }
-    // For mobile, return true but use simulation to prevent crashes
-    return true;
+    // For mobile, check if we have real voice recognition
+    return !!(Voice || ExpoSpeechRecognition);
+  }
+
+  hasRealVoiceRecognition() {
+    if (Platform.OS === 'web') {
+      return this.isAvailable();
+    }
+    return !!(Voice || ExpoSpeechRecognition);
   }
 
   async speakWelcomeMessage() {
-    const welcomeMessage = 'Welcome to Smart Home by Nafisa Tabasum. You can control devices with your voice.';
+    const welcomeMessage = 'Welcome to Smart Home by Nafisa Tabasum. You can control devices with your voice or ask me anything.';
     return this.speak(welcomeMessage);
   }
 
@@ -337,21 +480,27 @@ class VoiceService {
       if (this.webRecognition && Platform.OS === 'web') {
         this.webRecognition.abort();
         this.webRecognition = null;
+      } else if (Voice && Platform.OS !== 'web') {
+        Voice.destroy();
+        Voice.removeAllListeners();
+      } else if (ExpoSpeechRecognition && Platform.OS !== 'web') {
+        ExpoSpeechRecognition.stop().catch(() => {});
       }
     } catch (error) {
-      console.warn('[Voice] Failed to abort recognition:', error);
+      console.warn('[Voice] Failed to destroy voice service:', error);
     }
 
     try {
       if (Platform.OS !== 'web' && Speech && Speech.stop) {
         Speech.stop();
+      } else if (Platform.OS === 'web' && typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
       }
     } catch (error) {
       console.warn('[Voice] Failed to stop speech:', error);
     }
   }
 
-  // Debug method to help troubleshoot issues
   getDebugInfo() {
     return {
       platform: Platform.OS,
@@ -362,6 +511,10 @@ class VoiceService {
       lastError: this.lastError,
       webRecognitionAvailable: !!this.webRecognition,
       speechSynthesisAvailable: Platform.OS === 'web' ? !!(typeof window !== 'undefined' && window.speechSynthesis) : !!(Speech && Speech.speak),
+      hasVoiceLibrary: !!Voice,
+      hasExpoSpeechRecognition: !!ExpoSpeechRecognition,
+      hasRealVoiceRecognition: this.hasRealVoiceRecognition(),
+      recentEvents: this.voiceEvents.slice(-5),
     };
   }
 }

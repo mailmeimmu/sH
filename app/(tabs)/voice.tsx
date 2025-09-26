@@ -136,9 +136,12 @@ export default function VoiceControlScreen() {
         
         const permissions = await voiceService.requestPermissions();
         if (!permissions.granted) {
-          setVoiceError('Microphone permission not granted');
+          setVoiceError(permissions.error || 'Microphone permission not granted');
         } else {
           console.log('[Voice] Permissions granted successfully');
+          if (permissions.simulation) {
+            setVoiceError('Voice recognition not available - using simulation mode');
+          }
         }
       } catch (error) {
         console.warn('[Voice] Voice service init error:', error?.message || error);
@@ -189,7 +192,11 @@ export default function VoiceControlScreen() {
     }
     
     if (!voiceService.isAvailable()) {
-      Alert.alert('Voice Control', `Voice recognition is not available on this device. Platform: ${Platform.OS}. Please check your microphone permissions or use text input.`);
+      if (!voiceService.hasRealVoiceRecognition()) {
+        Alert.alert('Voice Control', `Real voice recognition is not available on this device (${Platform.OS}). You can still use the text input below to chat with the assistant.`);
+      } else {
+        Alert.alert('Voice Control', `Voice recognition is not available. Please check your microphone permissions or use text input.`);
+      }
       return;
     }
     
@@ -206,6 +213,8 @@ export default function VoiceControlScreen() {
           setIsListening(false);
           if (result?.transcript) {
             handleVoiceCommand(result.transcript);
+          } else {
+            addAssistantMessage('I didn\'t catch that. Please try speaking again or use the text input below.');
           }
         })
         .catch((error) => {
@@ -220,8 +229,10 @@ export default function VoiceControlScreen() {
             Alert.alert('Microphone Blocked', 'Microphone access is blocked. Please check your browser settings.');
           } else if (errorMsg.includes('network')) {
             Alert.alert('Network Error', 'Voice recognition requires an internet connection.');
+          } else if (errorMsg.includes('not available')) {
+            addAssistantMessage('Voice recognition is not available on this device. Please use the text input below to chat with me.');
           } else {
-            addAssistantMessage(`Voice error: ${errorMsg}. Try typing your command instead, or tap Debug for more info.`);
+            addAssistantMessage(`Voice error: ${errorMsg}. Please try typing your message below instead.`);
           }
         });
     } catch (error) {
