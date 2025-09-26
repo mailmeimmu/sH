@@ -208,10 +208,16 @@ export default function HomeControlScreen() {
   }, []);
 
   const startAssistant = async () => {
-    if (vaSpeaking || !voiceService.isAvailable()) return;
+    if (vaSpeaking) return;
     
     if (!db.can('voice.use')) {
       Alert.alert('Permission', 'You are not allowed to use voice control.');
+      return;
+    }
+    
+    // Simple voice simulation for mobile to avoid crashes
+    if (Platform.OS !== 'web') {
+      Alert.alert('Voice Control', 'Please use the Voice Control tab for voice commands.');
       return;
     }
     
@@ -227,7 +233,6 @@ export default function HomeControlScreen() {
       setVaListening(false);
       console.warn('[Home] Assistant listening error:', e?.message || e);
     } finally {
-      // Remove auto-restart to prevent crashes
     }
   };
 
@@ -435,25 +440,19 @@ export default function HomeControlScreen() {
       return;
     }
     
-    if (!voiceService.isAvailable()) {
-      Alert.alert('Voice Control', 'Voice recognition is not available on this device. Please check your microphone permissions.');
-    } else if (Platform.OS === 'web') {
-      Alert.alert('Voice Control', 'Voice assistant is available. Go to the Voice Control tab for full conversation mode.');
-    } else {
-      Alert.alert(
-        'Voice Control', 
-        'Voice control is available. Use the Voice Control tab for the best experience.',
-        [
-          { text: 'OK' },
-          { 
-            text: 'Go to Voice Control', 
-            onPress: () => {
-              router.push('/(tabs)/voice');
-            }
+    Alert.alert(
+      'Voice Control', 
+      'Voice assistant is available in the Voice Control tab.',
+      [
+        { text: 'OK' },
+        { 
+          text: 'Go to Voice Control', 
+          onPress: () => {
+            router.push('/(tabs)/voice');
           }
-        ]
-      );
-    }
+        }
+      ]
+    );
   };
 
   const performSignOut = () => {

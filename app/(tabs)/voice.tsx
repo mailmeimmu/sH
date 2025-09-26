@@ -118,22 +118,32 @@ export default function VoiceControlScreen() {
   const [suggestions, setSuggestions] = useState<QuickCommand[]>([]);
   const scrollRef = useRef<ScrollView>(null);
 
+  // Add crash protection
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
   useEffect(() => {
-    // Initialize and destroy the voice service
     const initVoice = async () => {
       try {
         console.log('[Voice] Initializing voice service...');
-        await voiceService.requestPermissions();
+        const permissions = await voiceService.requestPermissions();
+        if (!permissions.granted) {
+          setVoiceError('Microphone permission not granted');
+        }
         console.log('[Voice] Voice service initialized');
       } catch (error) {
         console.warn('[Voice] Voice service init error:', error?.message || error);
-        // Don't block the UI if voice fails to initialize
+        setVoiceError(error?.message || 'Voice service failed to initialize');
       }
     };
     
     initVoice();
+    
     return () => {
-      voiceService.destroy();
+      try {
+        voiceService.destroy();
+      } catch (error) {
+        console.warn('[Voice] Cleanup error:', error);
+      }
     };
   }, []);
 
@@ -163,42 +173,48 @@ export default function VoiceControlScreen() {
       return;
     }
     
+    if (voiceError) {
+      Alert.alert('Voice Error', voiceError);
+      return;
+    }
+    
     if (!voiceService.isAvailable()) {
       Alert.alert('Voice Control', 'Voice recognition is not available on this device. Please check your microphone permissions.');
       return;
     }
     
+    console.log('[Voice] Starting listening process...');
     setTranscript('');
     setIsListening(true);
-    console.log('[Voice] About to start listening...');
+    setVoiceError(null);
     
-    // Use actual voice service
     try {
       voiceService.startListening()
-      .then((result) => {
-        console.log('[Voice] Recognition result:', result);
-        setTranscript(result?.transcript || '');
-        setIsListening(false);
-        if (result?.transcript) {
-          handleVoiceCommand(result.transcript);
-        }
-      })
-      .catch((error) => {
-        setIsListening(false);
-        console.log('[Voice] Recognition error:', error);
-        const errorMsg = error?.message || String(error);
-        if (errorMsg.includes('permission')) {
-          Alert.alert('Microphone Permission', 'Please grant microphone permission to use voice control.');
-        } else if (errorMsg.includes('not available')) {
-          addAssistantMessage('Voice recognition not available on this device. Please type your command below.');
-        } else {
-          addAssistantMessage(`Voice error: ${errorMsg}. Please try again or type your command.`);
-        }
-      });
+        .then((result) => {
+          console.log('[Voice] Recognition result:', result);
+          setTranscript(result?.transcript || '');
+          setIsListening(false);
+          if (result?.transcript) {
+            handleVoiceCommand(result.transcript);
+          }
+        })
+        .catch((error) => {
+          setIsListening(false);
+          console.log('[Voice] Recognition error:', error);
+          const errorMsg = error?.message || String(error);
+          setVoiceError(errorMsg);
+          
+          if (errorMsg.includes('permission')) {
+            Alert.alert('Microphone Permission', 'Please grant microphone permission to use voice control.');
+          } else {
+            addAssistantMessage(`Voice error: ${errorMsg}. Please try typing your command instead.`);
+          }
+        });
     } catch (error) {
       console.error('[Voice] Start listening exception:', error);
       setIsListening(false);
-      Alert.alert('Voice Error', 'Failed to start voice recognition. Please try again.');
+      setVoiceError(error?.message || 'Voice service failed');
+      Alert.alert('Voice Error', 'Voice recognition failed. Please try typing your command instead.');
     }
   };
 
@@ -209,6 +225,7 @@ export default function VoiceControlScreen() {
       console.warn('[Voice] Stop listening error:', error);
     }
     setIsListening(false);
+    setVoiceError(null);
   };
 
   const speakResponse = async (text: string) => {
@@ -640,6 +657,21 @@ export default function VoiceControlScreen() {
           </View>
         ) : null}
 
+        {voiceError && (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>Voice Error: {voiceError}</Text>
+            <TouchableOpacity 
+              style={styles.retryButton} 
+              onPress={() => {
+                setVoiceError(null);
+                setIsListening(false);
+              }}
+            >
+              <Text style={styles.retryButtonText}>Dismiss</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={styles.statusContainer}>
           {isListening && (
             <View style={styles.statusItem}>
@@ -687,7 +719,7 @@ export default function VoiceControlScreen() {
               <TextInput
                 value={typedMessage}
                 onChangeText={handleTypedChange}
-                placeholder={suggestions.length ? 'Ask or tap a suggestion…' : 'Type your question or command...'}
+                placeholder={voiceError ? 'Voice unavailable - type your command here...' : suggestions.length ? 'Ask or tap a suggestion…' : 'Type your question or command...'}
                 placeholderTextColor="#6B7280"
                 style={styles.textInput}
                 multiline={false}
@@ -697,8 +729,16 @@ export default function VoiceControlScreen() {
               />
               <View style={styles.inlineButtons}>
                 <TouchableOpacity
-                  style={[styles.inlineIcon, isListening && styles.inlineIconActive]}
+                  style={[
+                    styles.inlineIcon, 
+                    isListening && styles.inlineIconActive,
+                    voiceError && styles.inlineIconDisabled
+                  ]}
                   onPress={() => {
+                    if (voiceError) {
+                      Alert.alert('Voice Unavailable', 'Please use the text input instead.');
+                      return;
+                    }
                     if (isListening) {
                       stopListening();
                       setAutoMode(false);
@@ -706,8 +746,9 @@ export default function VoiceControlScreen() {
                       startListening();
                     }
                   }}
+                  disabled={!!voiceError}
                 >
-                  {isListening ? <MicOff size={18} color="#F3F4F6" /> : <Mic size={18} color="#F3F4F6" />}
+                  {isListening ? <MicOff size={18} color="#F3F4F6" /> : <Mic size={18} color={voiceError ? "#6B7280" : "#F3F4F6"} />}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.inlineIcon, typedMessage.trim() ? styles.inlineIconConfirm : styles.inlineIconDisabled]}
@@ -902,6 +943,32 @@ const styles = StyleSheet.create({
   },
   inlineIconDisabled: {
     opacity: 0.4,
+  },
+  errorContainer: {
+    backgroundColor: '#7F1D1D',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#DC2626',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  errorText: {
+    color: '#FEE2E2',
+    fontSize: 14,
+    flex: 1,
+  },
+  retryButton: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   suggestionRow: {
     flexDirection: 'row',
