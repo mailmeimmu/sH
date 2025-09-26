@@ -8,6 +8,23 @@ module.exports = {
         android: null,
       },
     },
+    'vision-camera-face-detector': {
+      platforms: {
+        ios: null,
+        android: null,
+      },
+    },
+    'react-native-vision-camera': {
+      platforms: {
+        ios: {
+          sourceDir: '../node_modules/react-native-vision-camera/ios',
+          project: 'VisionCamera.xcodeproj',
+        },
+        android: {
+          sourceDir: '../node_modules/react-native-vision-camera/android',
+          packageImportPath: 'com.mrousavy.camera',
+        },
+      },
+    },
   },
 };
-
