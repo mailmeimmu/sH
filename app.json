@@ -20,7 +20,7 @@
         "NSCameraUsageDescription": "Camera access is required for face recognition during login and registration."
       },
       "bundleIdentifier": "com.anonymous.fawzinoiot",
-      "deploymentTarget": "13.0"
+      "deploymentTarget": "15.1"
     },
     "android": {
       "adaptiveIcon": {
@@ -53,7 +53,7 @@
             "usesCleartextTraffic": true
           },
           "ios": {
-            "deploymentTarget": "13.0"
+            "deploymentTarget": "15.1"
           }
         }
       ]
