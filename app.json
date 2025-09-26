@@ -19,7 +19,8 @@
         "NSMicrophoneUsageDescription": "This app uses the microphone to listen for your voice commands.",
         "NSCameraUsageDescription": "Camera access is required for face recognition during login and registration."
       },
-      "bundleIdentifier": "com.anonymous.fawzinoiot"
+      "bundleIdentifier": "com.anonymous.fawzinoiot",
+      "deploymentTarget": "13.0"
     },
     "android": {
       "adaptiveIcon": {
@@ -45,22 +46,15 @@
       "expo-local-authentication",
       "expo-secure-store",
       "expo-speech-recognition",
-      "react-native-vision-camera",
-      [
-        "react-native-vision-camera",
-        {
-          "cameraPermissionText": "$(PRODUCT_NAME) needs access to your Camera for face recognition."
-        }
-      ],
       [
         "expo-build-properties",
         {
           "android": {
             "usesCleartextTraffic": true
+          },
+          "ios": {
+            "deploymentTarget": "13.0"
           }
-        },
-        "ios": {
-          "deploymentTarget": "13.0"
         }
       ]
     ],
