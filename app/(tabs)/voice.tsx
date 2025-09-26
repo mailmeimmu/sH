@@ -121,15 +121,25 @@ export default function VoiceControlScreen() {
   // Add crash protection
   const [voiceError, setVoiceError] = useState<string | null>(null);
 
+  // Debug state for troubleshooting
+  const [debugMode, setDebugMode] = useState(__DEV__);
+  const [voiceDebugInfo, setVoiceDebugInfo] = useState<any>({});
+
   useEffect(() => {
     const initVoice = async () => {
       try {
         console.log('[Voice] Initializing voice service...');
+        // Get debug info from voice service
+        const debugInfo = voiceService.getDebugInfo ? voiceService.getDebugInfo() : {};
+        setVoiceDebugInfo(debugInfo);
+        console.log('[Voice] Voice service debug info:', debugInfo);
+        
         const permissions = await voiceService.requestPermissions();
         if (!permissions.granted) {
           setVoiceError('Microphone permission not granted');
+        } else {
+          console.log('[Voice] Permissions granted successfully');
         }
-        console.log('[Voice] Voice service initialized');
       } catch (error) {
         console.warn('[Voice] Voice service init error:', error?.message || error);
         setVoiceError(error?.message || 'Voice service failed to initialize');
@@ -179,7 +189,7 @@ export default function VoiceControlScreen() {
     }
     
     if (!voiceService.isAvailable()) {
-      Alert.alert('Voice Control', 'Voice recognition is not available on this device. Please check your microphone permissions.');
+      Alert.alert('Voice Control', `Voice recognition is not available on this device. Platform: ${Platform.OS}. Please check your microphone permissions or use text input.`);
       return;
     }
     
@@ -206,8 +216,12 @@ export default function VoiceControlScreen() {
           
           if (errorMsg.includes('permission')) {
             Alert.alert('Microphone Permission', 'Please grant microphone permission to use voice control.');
+          } else if (errorMsg.includes('not-allowed')) {
+            Alert.alert('Microphone Blocked', 'Microphone access is blocked. Please check your browser settings.');
+          } else if (errorMsg.includes('network')) {
+            Alert.alert('Network Error', 'Voice recognition requires an internet connection.');
           } else {
-            addAssistantMessage(`Voice error: ${errorMsg}. Please try typing your command instead.`);
+            addAssistantMessage(`Voice error: ${errorMsg}. Try typing your command instead, or tap Debug for more info.`);
           }
         });
     } catch (error) {
@@ -590,11 +604,34 @@ export default function VoiceControlScreen() {
     updateSuggestions(value);
   };
 
+  const showDebugInfo = () => {
+    const info = {
+      voiceService: voiceDebugInfo,
+      currentState: {
+        isListening,
+        isSpeaking,
+        voiceError,
+        platform: Platform.OS,
+        canUseVoice: db.can('voice.use'),
+      },
+      suggestions: suggestions.length,
+      conversationLength: conversationHistory.length,
+    };
+    Alert.alert('Voice Debug Info', JSON.stringify(info, null, 2));
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Voice Control</Text>
-        <Text style={styles.subtitle}>Chat or speak with your smart home assistant</Text>
+        <View style={styles.headerRight}>
+          <Text style={styles.subtitle}>Chat or speak with your smart home assistant</Text>
+          {debugMode && (
+            <TouchableOpacity style={styles.debugButton} onPress={showDebugInfo}>
+              <Text style={styles.debugButtonText}>Debug</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
       {/* Greeting on mount */}
       {conversationHistory.length <= 1 && (
@@ -657,17 +694,23 @@ export default function VoiceControlScreen() {
           </View>
         ) : null}
 
+        {/* Enhanced error display */}
         {voiceError && (
           <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>Voice Error: {voiceError}</Text>
+            <View style={styles.errorContent}>
+              <Text style={styles.errorText}>Voice Error: {voiceError}</Text>
+              <Text style={styles.errorHint}>Platform: {Platform.OS}</Text>
+            </View>
             <TouchableOpacity 
               style={styles.retryButton} 
               onPress={() => {
                 setVoiceError(null);
                 setIsListening(false);
+                // Try to reinitialize
+                voiceService.requestPermissions().catch(() => {});
               }}
             >
-              <Text style={styles.retryButtonText}>Dismiss</Text>
+              <Text style={styles.retryButtonText}>Retry</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -788,6 +831,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#9CA3AF',
     textAlign: 'center',
+  },
+  headerRight: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  debugButton: {
+    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  debugButtonText: {
+    color: '#60A5FA',
+    fontSize: 10,
+    fontWeight: '600',
   },
   conversationContainer: {
     flex: 1,
@@ -945,7 +1003,7 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
   errorContainer: {
-    backgroundColor: '#7F1D1D',
+    backgroundColor: 'rgba(127, 29, 29, 0.8)',
     borderRadius: 12,
     padding: 12,
     borderWidth: 1,
@@ -953,11 +1011,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
+  },
+  errorContent: {
+    flex: 1,
   },
   errorText: {
     color: '#FEE2E2',
     fontSize: 14,
-    flex: 1,
+    fontWeight: '600',
+  },
+  errorHint: {
+    color: '#FECACA',
+    fontSize: 12,
+    marginTop: 2,
   },
   retryButton: {
     backgroundColor: '#DC2626',
