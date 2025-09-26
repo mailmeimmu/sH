@@ -213,7 +213,7 @@ class VoiceService {
     this.lastError = null;
     this.voiceEvents = []; // Clear previous events
 
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       try {
         if (Platform.OS === 'web' && this.webRecognition) {
           console.log('[Voice] Using web speech recognition');
