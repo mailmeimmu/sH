@@ -6,14 +6,28 @@ def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 configurations.all {
     resolutionStrategy {
+        // Force AndroidX versions to resolve conflicts
         force 'androidx.core:core:1.16.0'
         force 'androidx.versionedparcelable:versionedparcelable:1.1.1'
         force 'androidx.appcompat:appcompat:1.6.1'
         force 'androidx.fragment:fragment:1.6.2'
         force 'androidx.lifecycle:lifecycle-common:2.7.0'
         force 'androidx.collection:collection:1.4.0'
+        
+        // Complete exclusion of Android Support Library
+        eachDependency { details ->
+            if (details.requested.group == 'com.android.support') {
+                details.useNothing('Replaced with AndroidX')
+            }
+        }
+        
+        // Force exclude specific problematic modules
+        exclude group: 'com.android.support', module: 'support-compat'
+        exclude group: 'com.android.support', module: 'versionedparcelable'
+        exclude group: 'com.android.support', module: 'support-v4'
+        exclude group: 'com.android.support', module: 'appcompat-v7'
+        exclude group: 'com.android.support', module: 'support-annotations'
     }
-    exclude group: 'com.android.support'
 }
 
 /**
