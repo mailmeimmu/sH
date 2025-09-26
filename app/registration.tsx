@@ -110,30 +110,6 @@ export default function RegistrationScreen() {
     }
   };
 
-  if (Platform.OS === 'web') {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={goBack}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.title}>New Registration</Text>
-        </View>
-        <View style={styles.webNotSupportedContainer}>
-          <CameraIcon size={64} color="#3B82F6" />
-          <Text style={styles.webNotSupportedTitle}>Face registration is not available on web</Text>
-          <Text style={styles.webNotSupportedText}>
-            Face registration requires camera access and is only available on iOS and Android devices.
-            Please use the mobile app to register with face recognition.
-          </Text>
-          <TouchableOpacity style={styles.primaryButton} onPress={goBack}>
-            <Text style={styles.primaryButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
   if (step === 'info') {
     return (
       <View style={styles.container}>

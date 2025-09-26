@@ -59,30 +59,6 @@ export default function FaceRecognitionScreen() {
     }
   }, []);
 
-  if (Platform.OS === 'web') {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.title}>Face Recognition</Text>
-        </View>
-        <View style={styles.webNotSupportedContainer}>
-          <CameraIcon size={64} color="#3B82F6" />
-          <Text style={styles.webNotSupportedTitle}>Face recognition is not available on web</Text>
-          <Text style={styles.webNotSupportedText}>
-            Face recognition requires camera access and is only available on iOS and Android devices.
-            Please use another login method.
-          </Text>
-          <TouchableOpacity style={styles.primaryButton} onPress={() => router.back()}>
-            <Text style={styles.primaryButtonText}>Use Another Method</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
   if (!FaceRecognitionNative) {
     return (
       <View style={styles.container}>
